@@ -103,12 +103,29 @@ The menu has:
   | `native60` | 960x544 @ ~60fps | native res, but the plugin can't quite hold 60 so expect some judder |
   | `hd` | 1280x720 @ 30fps | only works with Sharpscale and a 720p patch for that game |
 
-- **Upscaling.** lanczos (sharpest), spline36 or bilinear (softest).
-- **TV resolution.** 1080p by default. You can also pick 720p, 4K or whatever your TV prefers.
+- **Player.** `fast` is the default and has the least delay (see [input delay](#input-delay)). `compatible` uses mpv instead, which is a bit slower but lets you pick the upscaling filter (lanczos, spline36 or bilinear).
+- **TV resolution.** 1080p at 60Hz by default. You can also pick 720p, 4K or whatever your TV prefers. This one kicks in after a restart.
 - **Wi-Fi.** Shows which network the Pi is on and lets you join a different one. Type the password on a keyboard, or use the on-screen keyboard if you've only got a pad or mouse. You can also forget networks or turn Wi-Fi off from here.
 - **Bluetooth audio** and pairing (see [sound](#sound)).
 - **Info + help.** Shows what the Pi can see: the TV, the Vita and its IP address.
 - **Check for updates**, restart, shut down and uninstall.
+
+## Input delay
+
+Keeping the delay down was the whole point of this, so here's what it does:
+
+- **The fast player.** The Vita's picture goes straight from the USB capture to the Pi 5's display hardware, which does the upscaling itself. There's only ever one frame waiting, and if the Pi falls behind for a moment it throws the old frame away instead of queueing it. Queued-up frames are what cause that half a second (or worse) of lag you get with most capture setups.
+- **CPU at full speed** while docked, so frames never wait for it to ramp up.
+- **USB power saving turned off**, so the Vita's connection never gets paused.
+- **A proper 60Hz output** set at boot, so the TV isn't running at 30 or 50Hz.
+
+The rest is down to your TV and the mode you pick:
+
+- **Turn on game mode on your TV** for that HDMI input. TVs can add 50 to 150ms of their own processing otherwise. Honestly this matters as much as anything above.
+- **Use `smooth` (60fps).** At 30fps every frame is on screen twice as long, so it feels laggier even with the same pipeline.
+- **Use the fast player.** It's the default, and *info + help* in the menu shows which one is actually running.
+
+If you want to measure it, swap the Vita plugin for the normal `udcd_uvc.skprx` (the one that keeps the Vita's screen on), film the Vita and the TV together in slow motion on your phone, and count the frames between the two.
 
 ## Sound
 
@@ -154,7 +171,7 @@ Usually the video format. Edit `/etc/vitadock.conf` (Ctrl+Alt+F2 on a keyboard g
 <details>
 <summary><b>it feels laggy</b></summary>
 
-Turn on your TV's **game mode** for that HDMI input first, as that's usually the biggest difference. Then use `smooth` mode, and try 720p output so the TV does the last bit of scaling.
+Turn on your TV's **game mode** for that HDMI input first, as that's usually the biggest difference. Then check *info + help* says the player is **fast**. If it says compatible, either the fast player isn't installed (re-run the installer or update from the menu) or it didn't work with your setup, which the dock log will show. Use `smooth` mode for 60fps.
 </details>
 
 <details>

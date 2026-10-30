@@ -34,6 +34,7 @@ DEFAULTS = {
     "BT_AUDIO": "no",
     "AUDIO_PCM": "auto",
     "EXTRA_MPV_ARGS": "",
+    "PLAYER": "fast",
 }
 
 VIDEO_MODES = [
@@ -184,6 +185,32 @@ def pick_pixfmt(cfg, dev):
     return ""
 
 
+_GST_OK = None
+
+
+def gst_available():
+    global _GST_OK
+    if _GST_OK is None:
+        _GST_OK = bool(shutil.which("gst-launch-1.0")) and all(
+            sh(["gst-inspect-1.0", el], timeout=10).returncode == 0 for el in ("v4l2src", "kmssink"))
+    return _GST_OK
+
+
+GST_FORMATS = {"nv12": "NV12", "yuyv422": "YUY2"}
+
+
+def gst_command(cfg, vita, pixfmt):
+    w, h = cfg["VITA_MODE"].split("x")
+    caps = "video/x-raw,width=%s,height=%s,framerate=%s/1" % (w, h, cfg["VITA_FPS"])
+    if GST_FORMATS.get(pixfmt):
+        caps += ",format=" + GST_FORMATS[pixfmt]
+    return ["gst-launch-1.0", "-q",
+            "v4l2src", "device=" + vita, "io-mode=mmap", "do-timestamp=false", "!",
+            caps, "!",
+            "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream", "!",
+            "kmssink", "sync=false", "can-scale=true"]
+
+
 def mpv_command(cfg, disp, out_mode, vita, pixfmt):
     dev, conn, _ = disp
     cmd = [
@@ -191,6 +218,7 @@ def mpv_command(cfg, disp, out_mode, vita, pixfmt):
         "--vo=gpu", "--gpu-context=drm",
         "--drm-device=" + dev, "--drm-connector=" + conn, "--drm-mode=" + out_mode,
         "--profile=low-latency", "--untimed", "--cache=no", "--no-audio", "--hwdec=no",
+        "--demuxer-thread=no", "--swapchain-depth=1",
         "--scale=" + cfg["SCALER"], "--keepaspect=yes",
         "--osc=no", "--osd-level=0", "--no-input-default-bindings", "--input-terminal=no",
         "--msg-level=all=warn",
@@ -202,6 +230,43 @@ def mpv_command(cfg, disp, out_mode, vita, pixfmt):
     cmd += shlex.split(cfg["EXTRA_MPV_ARGS"])
     cmd.append("av://v4l2:" + vita)
     return cmd
+
+
+def boot_cmdline_path():
+    d = read_kv(INFO).get("BOOT_DIR", "")
+    for cand in ([d] if d else []) + ["/boot/firmware", "/boot"]:
+        if cand and os.path.exists(cand + "/cmdline.txt"):
+            return cand + "/cmdline.txt"
+    return None
+
+
+def apply_output_mode(cfg):
+    path = boot_cmdline_path()
+    if not path:
+        return False
+    with open(path) as f:
+        tokens = f.read().split()
+    keep = [t for t in tokens if not t.startswith("video=HDMI-A-") and t != "usbcore.autosuspend=-1"]
+    om = cfg["OUTPUT_MODE"]
+    if re.match(r"^\d+x\d+(@\d+)?$", om):
+        mode = om if "@" in om else om + "@60"
+        keep += ["video=HDMI-A-1:" + mode, "video=HDMI-A-2:" + mode]
+    keep.append("usbcore.autosuspend=-1")
+    if keep == tokens:
+        return False
+    with open(path + ".tmp", "w") as f:
+        f.write(" ".join(keep) + "\n")
+    os.replace(path + ".tmp", path)
+    return True
+
+
+def cpu_performance():
+    for gov in glob.glob("/sys/devices/system/cpu/cpufreq/policy*/scaling_governor"):
+        try:
+            with open(gov, "w") as f:
+                f.write("performance")
+        except OSError:
+            pass
 
 
 def ip_addresses():
@@ -591,7 +656,10 @@ def build_menu(st):
     cfg = st.cfg
     items = [("back", "back to game" if st.vita else "close menu", "")]
     items.append(("mode", "video mode", mode_name(cfg)))
-    items.append(("scaler", "upscaling", cfg["SCALER"]))
+    fast = cfg["PLAYER"] == "fast" and gst_available()
+    items.append(("player", "player", "fast" if cfg["PLAYER"] == "fast" else "compatible"))
+    if not fast:
+        items.append(("scaler", "upscaling", cfg["SCALER"]))
     items.append(("output", "tv resolution", cfg["OUTPUT_MODE"]))
     items.append(("wifi", "wi-fi", st.wifi_label or "..."))
     items.append(("audio", "bluetooth audio", "on" if cfg["BT_AUDIO"] == "yes" else "off"))
@@ -616,7 +684,7 @@ def item_help(st, key):
     if key == "scaler":
         return dict(SCALERS).get(cfg["SCALER"], "")
     if key == "output":
-        return dict(OUTPUTS).get(cfg["OUTPUT_MODE"], "custom, from vitadock.conf")
+        return dict(OUTPUTS).get(cfg["OUTPUT_MODE"], "custom, from vitadock.conf") + ". applies after a restart"
     return {
         "back": "the game picks up where it was" if st.vita else "back to the waiting screen",
         "wifi": "join a network, or see which one the pi is on",
@@ -624,6 +692,11 @@ def item_help(st, key):
         "pair": "do this once, then connect from the vita's bluetooth menu",
         "info": "ip address, what's plugged in, controls",
         "update": "needs the pi on the internet",
+        "player": ("fast: lowest delay, the pi's display hardware does the scaling"
+                   if cfg["PLAYER"] == "fast" and gst_available() else
+                   "fast isn't installed, using mpv. re-run the installer to get it"
+                   if cfg["PLAYER"] == "fast" else
+                   "compatible: mpv. more delay, but lets you pick the upscaling filter"),
         "reboot": "",
         "shutdown": "wait for the green light to stop before pulling the power",
         "uninstall": "removes vitadock++ and restarts into plain pi os",
@@ -779,6 +852,7 @@ def draw_info(g, st):
         ("ip address", ", ".join(st.ips) or "not on a network"),
         ("tv", "%s at %s" % (st.disp[1], st.out_mode) if st.disp else "none"),
         ("vita", "%s (%s)" % (st.vita, st.pixfmt or "default format") if st.vita else "not plugged in"),
+        ("player", ("fast" if st.cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)")),
         ("settings file", CONF),
     ]
     for k, v in rows:
@@ -1181,6 +1255,9 @@ class Dock:
         self.last_note = ""
         self.dirty = True
         self.last_draw = 0
+        self.gst_fails = 0
+        self.gst_broken = False
+        self.player_used = ""
 
     def note(self, msg):
         if msg != self.last_note:
@@ -1188,12 +1265,22 @@ class Dock:
             self.last_note = msg
 
 
+    def pick_player(self):
+        if self.st.cfg["PLAYER"] == "fast" and not self.gst_broken and gst_available():
+            return "fast"
+        return "mpv"
+
     def play(self):
         st = self.st
-        cmd = mpv_command(st.cfg, st.disp, st.out_mode, st.vita, st.pixfmt)
-        log("playing %s: %s @ %sfps (%s) -> %s %s, %s" % (
-            st.vita, st.cfg["VITA_MODE"], st.cfg["VITA_FPS"], st.pixfmt or "default",
-            st.disp[1], st.out_mode, st.cfg["SCALER"]))
+        player = self.pick_player()
+        if player == "fast":
+            cmd = gst_command(st.cfg, st.vita, st.pixfmt)
+        else:
+            cmd = mpv_command(st.cfg, st.disp, st.out_mode, st.vita, st.pixfmt)
+        self.player_used = player
+        log("playing %s with %s: %s @ %sfps (%s) -> %s %s" % (
+            st.vita, player, st.cfg["VITA_MODE"], st.cfg["VITA_FPS"], st.pixfmt or "default",
+            st.disp[1], st.out_mode))
         self.screen.close()
         started = time.time()
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
@@ -1218,11 +1305,24 @@ class Dock:
             st.error = ""
             self.open_menu()
         elif ran < 5:
-            self.fails += 1
-            st.error = "vita found but no picture (try %d). trying again..." % self.fails
-            self.retry_at = time.time() + (3 if self.fails < 3 else 10)
-            log("mpv stopped after %.1fs (exit %s)" % (ran, proc.returncode))
+            log("%s stopped after %.1fs (exit %s)" % (player, ran, proc.returncode))
+            if player == "fast":
+                self.gst_fails += 1
+                if self.gst_fails >= 2:
+                    self.gst_broken = True
+                    log("fast player keeps failing, falling back to mpv")
+                    st.error = "fast player didn't work here, using the compatible one."
+                    self.retry_at = time.time() + 1
+                else:
+                    st.error = "starting the fast player again..."
+                    self.retry_at = time.time() + 2
+            else:
+                self.fails += 1
+                st.error = "vita found but no picture (try %d). trying again..." % self.fails
+                self.retry_at = time.time() + (3 if self.fails < 3 else 10)
         else:
+            if player == "fast":
+                self.gst_fails = 0
             self.fails = 0
             st.error = ""
             log("stream ended")
@@ -1407,6 +1507,14 @@ class Dock:
             cur = cfg[conf_key]
             i = (opts.index(cur) + step) % len(opts) if cur in opts else 0
             set_config(conf_key, opts[i])
+            if key == "output":
+                try:
+                    apply_output_mode(load_config())
+                except OSError as e:
+                    log("couldn't update cmdline.txt: %s" % e)
+        elif key == "player":
+            set_config("PLAYER", "compatible" if cfg["PLAYER"] == "fast" else "fast")
+            self.gst_broken = False
         self.st.cfg = load_config()
         build_menu(self.st)
 
@@ -1415,7 +1523,7 @@ class Dock:
         if key == "back":
             st.screen = "home"
             self.retry_at = 0
-        elif key in ("mode", "scaler", "output"):
+        elif key in ("mode", "scaler", "output", "player"):
             self.cycle(key, 1)
         elif key == "audio":
             if st.cfg["BT_AUDIO"] == "yes":
@@ -1558,7 +1666,7 @@ class Dock:
                 st.sel = (st.sel - 1) % n
             elif kind == "DOWN":
                 st.sel = (st.sel + 1) % n
-            elif kind in ("LEFT", "RIGHT") and key in ("mode", "scaler", "output"):
+            elif kind in ("LEFT", "RIGHT") and key in ("mode", "scaler", "output", "player"):
                 self.cycle(key, -1 if kind == "LEFT" else 1)
             elif kind == "OK":
                 self.activate(key)
@@ -1633,6 +1741,11 @@ class Dock:
 
     def run(self):
         signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+        cpu_performance()
+        try:
+            apply_output_mode(load_config())
+        except OSError as e:
+            log("couldn't update cmdline.txt: %s" % e)
         log("VitaDock++ %s starting" % self.st.ver)
         st = self.st
         while True:
@@ -1684,6 +1797,7 @@ def cmd_status():
     print("vita   %s" % ("%s (%s)" % (vita, pick_pixfmt(cfg, vita) or "default") if vita else "not plugged in"))
     print("mode   %s (%s @ %s)" % (mode_name(cfg), cfg["VITA_MODE"], cfg["VITA_FPS"]))
     print("audio  %s" % ("bluetooth" if cfg["BT_AUDIO"] == "yes" else "off"))
+    print("player %s" % ("fast (gstreamer)" if cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)"))
 
 
 def cmd_screenshot(outdir):
@@ -1750,6 +1864,8 @@ def main(argv):
     elif cmd == "bluetooth" and len(argv) == 3 and argv[2] in ("on", "off"):
         (bt_enable if argv[2] == "on" else bt_disable)()
         print("bluetooth audio " + argv[2])
+    elif cmd == "apply-output":
+        print("changed" if apply_output_mode(load_config()) else "already set")
     elif cmd == "screenshot" and len(argv) == 3:
         cmd_screenshot(argv[2])
     elif cmd in ("version", "--version"):

@@ -138,6 +138,8 @@ export DEBIAN_FRONTEND=noninteractive
 as_root apt-get update -q
 as_root apt-get install -y -q mpv v4l-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
   || die "apt couldn't install the packages. check the Pi is online and try again."
+as_root apt-get install -y -q gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  || warn "couldn't install gstreamer, so the dock will use the slower mpv player."
 as_root apt-get install -y -q bluez bluez-alsa-utils bluez-tools \
   || warn "couldn't install the bluetooth audio packages. everything else will still work."
 
@@ -184,10 +186,11 @@ if [ -n "$BOOT_DIR" ]; then
   CMD=$BOOT_DIR/cmdline.txt
   [ -f "$CMD.vitadock-bak" ] || as_root cp "$CMD" "$CMD.vitadock-bak"
   line=$(head -n1 "$CMD")
-  for tok in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0; do
+  for tok in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 usbcore.autosuspend=-1; do
     [[ " $line " == *" $tok "* ]] || line="$line $tok"
   done
   printf '%s\n' "$line" | as_root tee "$CMD" >/dev/null
+  as_root /usr/bin/python3 "$LIB/vitadock.py" apply-output >/dev/null || warn "couldn't set the tv mode at boot."
 
   CFG=$BOOT_DIR/config.txt
   if [ -f "$CFG" ] && ! grep -q '^disable_splash=1' "$CFG"; then
