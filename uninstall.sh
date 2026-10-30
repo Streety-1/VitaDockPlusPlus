@@ -46,7 +46,8 @@ fi
 
 echo "removing files"
 as_root rm -f /usr/local/bin/vitadock
-as_root rm -rf "$LIB" "$SHARE"
+as_root rm -rf "$LIB" "$SHARE" /var/lib/vitadock /run/vitadock
+as_root rm -f /var/log/vitadock-update.log
 [ "$PURGE" = yes ] && as_root rm -f "$CONF"
 as_root systemctl daemon-reload
 

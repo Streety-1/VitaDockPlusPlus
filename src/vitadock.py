@@ -24,6 +24,11 @@ SYS_SOUND = os.environ.get("VITADOCK_SYS_SOUND", "/sys/class/sound")
 PROC_ASOUND = os.environ.get("VITADOCK_PROC_ASOUND", "/proc/asound")
 DEV_GLOB = os.environ.get("VITADOCK_DEV_GLOB", "/dev/video*")
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
+UPDATE_DIR = os.environ.get("VITADOCK_UPDATE_DIR", "/run/vitadock")
+UPDATE_PROGRESS = UPDATE_DIR + "/update-progress"
+UPDATE_LOG = os.environ.get("VITADOCK_UPDATE_LOG", "/var/log/vitadock-update.log")
+UPDATED_MARKER = os.environ.get("VITADOCK_UPDATED_MARKER", "/var/lib/vitadock/just-updated")
+UPDATE_UNIT = "vitadock-update.service"
 
 DEFAULTS = {
     "VITA_MODE": "864x488",
@@ -681,6 +686,9 @@ class State:
         self.pixfmt = ""
         self.vita_audio = None
         self.error = ""
+        self.notice = ""
+        self.notice_until = 0
+        self.upd = None
         self.confirm = None
         self.msg = None
         self.busy = ""
@@ -807,7 +815,7 @@ def draw_home(g, st):
     lh = g.line_h("body")
     y = top + 62 * u
     g.text(tx, y, "usb cable into any port on the pi.", "body", DIM)
-    g.text(tx, y + lh, "the vita needs the udcd_uvc plugin.", "body", DIM)
+    g.text(tx, y + lh, "the vita needs a usb video plugin (see the readme).", "body", DIM)
 
     y = top + 180 * u
     width = g.w - tx - 120 * u
@@ -818,6 +826,8 @@ def draw_home(g, st):
     dotted(g, tx, y + lh * 3.9, "audio", audio_desc(st), width)
     if st.error:
         g.text(tx, y + lh * 5.6, st.error, "small", BAD)
+    elif st.notice and time.time() < st.notice_until:
+        g.text(tx, y + lh * 5.6, st.notice, "small", GOOD)
 
 
 def draw_menu(g, st):
@@ -1052,10 +1062,70 @@ def draw_text(g, st):
             st.hits.append((kx, ky, kw, kh, (r, c)))
 
 
+def read_update_progress():
+    try:
+        with open(UPDATE_PROGRESS) as f:
+            line = f.read().strip().splitlines()[-1]
+    except (OSError, IndexError):
+        return None
+    kind, _, msg = line.partition("|")
+    return kind.strip(), msg.strip()
+
+
+def tail_update_log(n=4):
+    try:
+        with open(UPDATE_LOG, errors="replace") as f:
+            lines = [l.rstrip() for l in f.readlines() if l.strip()]
+    except OSError:
+        return []
+    return [l[:90] for l in lines[-n:]]
+
+
+def draw_update(g, st):
+    u, W = g.u, g.w
+    up = st.upd or {}
+    state = up.get("state", "running")
+    draw_chrome(g, st, "" if state == "running" else "enter / esc . . . back")
+    x, y = 120 * u, 150 * u
+    bw = W - 240 * u
+    title = {"running": "updating to %s" % up.get("to", "?"),
+             "done": "update finished",
+             "error": "update failed"}[state]
+    g.text(x, y, title, "big", BAD if state == "error" else FG)
+    y += 80 * u
+    bh = 30 * u
+    pct = max(0, min(100, up.get("pct", 0)))
+    g.rect(x, y, bw, bh, FAINT)
+    g.rect(x + 3 * u, y + 3 * u, bw - 6 * u, bh - 6 * u, BG)
+    fill = (bw - 10 * u) * pct / 100.0
+    if fill > 0:
+        g.rect(x + 5 * u, y + 5 * u, fill, bh - 10 * u, BAD if state == "error" else ACCENT)
+    y += bh + 16 * u
+    g.text(x, y, "%d%%" % pct, "body", FG)
+    secs = int(time.time() - up.get("started", time.time()))
+    g.text(x + bw, y, "%d:%02d" % (secs // 60, secs % 60), "body", DIM, "r")
+    y += g.line_h("body") * 1.5
+    msg = up.get("msg", "")
+    g.text(x, y, msg[:80], "body", BAD if state == "error" else DIM)
+    y += g.line_h("body") * 1.8
+    if state == "running":
+        for line in ("the first update after a new release can take a few minutes,",
+                     "it has to download new packages. the dock restarts itself at the end."):
+            g.text(x, y, line, "small", DIM)
+            y += g.line_h("small") * 1.3
+    elif state == "error":
+        for line in up.get("log", []):
+            g.text(x, y, line, "small", DIM)
+            y += g.line_h("small") * 1.3
+        g.text(x, y + 10 * u, "full log: " + UPDATE_LOG, "small", DIM)
+    else:
+        g.text(x, y, "restart the pi if the dock doesn't come back on its own.", "small", DIM)
+
+
 def draw(g, st):
     {"home": draw_home, "menu": draw_menu, "confirm": draw_confirm, "msg": draw_message,
      "busy": draw_message, "pair": draw_pair, "info": draw_info,
-     "wifi": draw_wifi, "text": draw_text}[st.screen](g, st)
+     "wifi": draw_wifi, "text": draw_text, "update": draw_update}[st.screen](g, st)
 
 
 class PygameInput:
@@ -1690,21 +1760,80 @@ class Dock:
             self.message("you're up to date", "running %s, the latest." % latest)
             return
         self.ask(["update %s -> %s?" % (self.st.ver, latest), "",
-                  "the dock restarts by itself when it's done."], lambda: self.run_update(slug))
+                  "you'll see a progress bar. the dock restarts by itself when it's done."],
+                 lambda: self.run_update(slug, latest))
 
-    def run_update(self, slug):
-        cmd = "curl -fsSL https://raw.githubusercontent.com/%s/main/install.sh | bash -s -- --update --yes" % slug
-        self.busy("updating", lambda: sh(["systemd-run", "--collect",
-                                           "--unit=vitadock-update-%d" % int(time.time()),
-                                           "/bin/bash", "-c", cmd]))
-        time.sleep(120)
+    def run_update(self, slug, latest="?"):
+        st = self.st
+        try:
+            os.makedirs(UPDATE_DIR, exist_ok=True)
+            with open(UPDATE_PROGRESS, "w") as f:
+                f.write("1|starting the updater\n")
+        except OSError as e:
+            self.message("couldn't start the update", str(e)[:70])
+            return
+        url = "https://raw.githubusercontent.com/%s/main/install.sh" % slug
+        script = ('curl -fsSL --retry 2 "{url}" -o "{d}/install.sh" '
+                  '|| {{ echo "error|couldn\'t download the installer. is the pi online?" > "{p}"; exit 1; }}; '
+                  'exec /bin/bash "{d}/install.sh" --update --yes --progress="{p}"').format(
+                      url=url, d=UPDATE_DIR, p=UPDATE_PROGRESS)
+        sh(["systemctl", "stop", UPDATE_UNIT])
+        sh(["systemctl", "reset-failed", UPDATE_UNIT])
+        r = sh(["systemd-run", "--collect", "--unit=" + UPDATE_UNIT.replace(".service", ""),
+                "/bin/bash", "-c", script])
+        if r.returncode != 0:
+            self.message("couldn't start the update", (r.stderr or r.stdout).strip()[:70])
+            return
+        now = time.time()
+        st.upd = {"to": latest, "pct": 1, "msg": "starting the updater", "state": "running",
+                  "started": now, "changed": now, "polled": 0, "checked": now, "log": []}
+        st.screen = "update"
+        log("update to %s started" % latest)
+
+    def poll_update(self):
+        st = self.st
+        up = st.upd
+        if not up or up["state"] != "running":
+            return
+        now = time.time()
+        if now - up["polled"] < 0.5:
+            return
+        up["polled"] = now
+        got = read_update_progress()
+        if got:
+            kind, msg = got
+            if kind == "error":
+                up.update(state="error", msg=msg or "something went wrong", log=tail_update_log())
+            elif kind == "done":
+                up.update(state="done", pct=100, msg=msg or "done")
+            elif kind.isdigit() and (int(kind), msg) != (up["pct"], up["msg"]):
+                up.update(pct=int(kind), msg=msg, changed=now)
+        self.dirty = True
+        if up["state"] != "running":
+            log("update %s: %s" % (up["state"], up["msg"]))
+            return
+        if now - up["checked"] >= 3:
+            up["checked"] = now
+            state = sh(["systemctl", "is-active", UPDATE_UNIT], timeout=5).stdout.strip()
+            if state not in ("active", "activating", "reloading"):
+                got = read_update_progress()
+                if got and got[0] in ("error", "done"):
+                    return
+                up.update(state="error", log=tail_update_log(),
+                          msg="couldn't download the installer. is the pi online?" if up["pct"] <= 1
+                          else "the updater stopped before it finished.")
+                log("update unit ended early (%s)" % state)
+        if now - up["changed"] > 20 * 60:
+            up.update(state="error", log=tail_update_log(),
+                      msg="nothing's happened for 20 minutes, so it looks stuck.")
 
     def uninstall(self):
-        self.busy("uninstalling", lambda: sh(["systemd-run", "--collect",
-                                               "--unit=vitadock-uninstall-%d" % int(time.time()),
-                                               "/bin/bash", SHARE + "/uninstall.sh",
-                                               "--yes", "--purge", "--reboot"]))
-        time.sleep(120)
+        r = sh(["systemd-run", "--collect", "--unit=vitadock-uninstall-%d" % int(time.time()),
+                "/bin/bash", SHARE + "/uninstall.sh", "--yes", "--purge", "--reboot"])
+        if r.returncode != 0:
+            self.message("couldn't start the uninstall", (r.stderr or r.stdout).strip()[:70])
+            return
+        self.st.screen, self.st.busy = "busy", "uninstalling, the pi will restart"
 
 
     def handle(self, action):
@@ -1796,6 +1925,9 @@ class Dock:
         elif st.screen == "info":
             if kind in ("OK", "BACK"):
                 self.open_menu()
+        elif st.screen == "update":
+            if st.upd and st.upd["state"] != "running" and kind in ("OK", "BACK"):
+                self.open_menu()
         elif st.screen == "pair":
             if kind in ("BACK", "OK"):
                 if st.pairing:
@@ -1822,6 +1954,8 @@ class Dock:
 
     def tick(self):
         st = self.st
+        if st.screen == "update":
+            self.poll_update()
         p = st.pairing
         if st.screen == "pair" and p and not p.result:
             if int(time.time()) % 2 == 0:
@@ -1833,14 +1967,22 @@ class Dock:
                                  "try again, and make sure bluetooth is on in the vita's settings.")
 
     def run(self):
+        st = self.st
         signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
         cpu_performance()
+        try:
+            with open(UPDATED_MARKER) as f:
+                newver = f.read().strip()
+            os.remove(UPDATED_MARKER)
+            st.notice, st.notice_until = "updated to %s." % (newver or st.ver), time.time() + 180
+            log("just updated to %s" % newver)
+        except OSError:
+            pass
         try:
             apply_output_mode(load_config())
         except OSError as e:
             log("couldn't update cmdline.txt: %s" % e)
         log("VitaDock++ %s starting" % self.st.ver)
-        st = self.st
         while True:
             st.cfg = load_config()
             st.disp = find_display(st.cfg)

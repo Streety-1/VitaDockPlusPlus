@@ -10,11 +10,14 @@ LIB=/usr/local/lib/vitadock
 CONF=/etc/vitadock.conf
 INFO=$SHARE/install-info
 UNIT=/etc/systemd/system/vitadock.service
+STATE_DIR=/var/lib/vitadock
+UPDATE_LOG=/var/log/vitadock-update.log
 
 YES=no
 UPDATE=no
 RESET=no
 REBOOT=ask
+PROGRESS=""
 
 usage() {
   cat <<'EOF'
@@ -25,10 +28,11 @@ VitaDock++ installer. Run it on the Pi (Raspberry Pi OS Lite, 64-bit):
 or from a copy of the repo:   bash install.sh
 
 options:
-  -y, --yes        don't ask anything
-  --update         update an existing install (keeps your settings)
-  --reset-config   put the settings back to default
-  --no-reboot      don't reboot at the end
+  -y, --yes          don't ask anything
+  --update           update an existing install (keeps your settings)
+  --reset-config     put the settings back to default
+  --no-reboot        don't reboot at the end
+  --progress=FILE    write progress for the tv menu's update screen (used by the dock)
 EOF
 }
 
@@ -38,15 +42,39 @@ for arg in "$@"; do
     --update)       UPDATE=yes ;;
     --reset-config) RESET=yes ;;
     --no-reboot)    REBOOT=no ;;
+    --progress=*)   PROGRESS=${arg#--progress=} ;;
     -h|--help)      usage; exit 0 ;;
     *) echo "don't know the option '$arg' (try --help)"; exit 1 ;;
   esac
 done
 
+if [ -n "$PROGRESS" ]; then
+  exec >>"$UPDATE_LOG" 2>&1
+  echo
+  echo "=== update started $(date)"
+fi
+exec 4>&1
+
+progress_raw() {
+  [ -n "$PROGRESS" ] || return 0
+  printf '%s\n' "$1" >"$PROGRESS.tmp" && mv -f "$PROGRESS.tmp" "$PROGRESS"
+}
+progress() { progress_raw "$1|$2"; }
+
 say()  { printf '%s\n' "$*"; }
 step() { printf '\n:: %s\n' "$*"; }
 warn() { printf '!! %s\n' "$*" >&2; }
-die()  { printf '\n!! %s\n' "$*" >&2; exit 1; }
+die()  { printf '\n!! %s\n' "$*" >&2; progress_raw "error|$*"; exit 1; }
+
+TMP=""
+on_exit() {
+  local rc=$?
+  [ -n "$TMP" ] && rm -rf "$TMP"
+  if [ "$rc" -ne 0 ] && [ -n "$PROGRESS" ] && ! grep -q '^error|' "$PROGRESS" 2>/dev/null; then
+    progress_raw "error|the installer stopped (exit $rc). the log has the details."
+  fi
+}
+trap on_exit EXIT
 
 ask() {
   local reply
@@ -60,6 +88,30 @@ ask() {
 if [ "$(id -u)" -eq 0 ]; then SUDO=(); else SUDO=(sudo); fi
 as_root() { "${SUDO[@]}" "$@"; }
 
+APT_OPTS=(-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+apt_progress() {
+  local lo=$1 hi=$2 mid=$(( ($1 + $2) / 2 )) kind _pkg pct desc
+  while IFS=: read -r kind _pkg pct desc; do
+    pct=${pct%%.*}
+    [[ "$pct" =~ ^[0-9]+$ ]] || continue
+    case "$kind" in
+      dlstatus) progress $(( lo + pct * (mid - lo) / 100 )) "downloading packages: ${desc,,}" ;;
+      pmstatus) progress $(( mid + pct * (hi - mid) / 100 )) "${desc,,}" ;;
+    esac
+  done
+}
+
+apt_install() {
+  local lo=$1 hi=$2
+  shift 2
+  if [ -n "$PROGRESS" ] && [ ${#SUDO[@]} -eq 0 ]; then
+    apt-get install "${APT_OPTS[@]}" -o APT::Status-Fd=3 "$@" 3>&1 1>&4 2>&4 | apt_progress "$lo" "$hi"
+  else
+    as_root apt-get install "${APT_OPTS[@]}" "$@"
+  fi
+}
+
 cat <<'EOF'
 
   VitaDock++
@@ -68,6 +120,7 @@ cat <<'EOF'
 
 EOF
 
+progress 3 "checking the pi"
 command -v apt-get >/dev/null || die "this needs Raspberry Pi OS (Lite, 64-bit)."
 command -v systemctl >/dev/null || die "this needs systemd."
 
@@ -101,16 +154,17 @@ fi
 if [ "$INSTALLED" = no ] && [ "$UPDATE" = no ]; then
   say ""
   say "this will:"
-  say "  - install mpv, pygame and a few bits it needs"
+  say "  - install mpv, gstreamer, pygame and a few bits it needs"
   say "  - make the Pi boot straight into the dock (no login prompt on the tv)"
   say "  - hide the boot text so it looks tidy"
   say ""
-  say "everything else (settings, bluetooth, uninstalling) is in the menu on the tv afterwards."
+  say "everything else (settings, wi-fi, bluetooth, updates, uninstalling) is in the menu on the tv afterwards."
   say ""
   ask "go ahead?" || exit 1
 fi
 
 step "getting VitaDock++"
+progress 6 "downloading vitadock++"
 SRC=""
 SELF=${BASH_SOURCE[0]:-}
 if [ -n "$SELF" ] && [ -f "$SELF" ]; then
@@ -118,13 +172,9 @@ if [ -n "$SELF" ] && [ -f "$SELF" ]; then
   [ -f "$d/src/vitadock.py" ] && SRC=$d
 fi
 if [ -z "$SRC" ]; then
-  case "$REPO_SLUG" in Streety-1/*)
-    die "this copy of install.sh doesn't know which github repo to download from. run it from inside the repo folder instead (bash install.sh)." ;;
-  esac
   TMP=$(mktemp -d)
-  trap 'rm -rf "$TMP"' EXIT
-  curl -fsSL "https://github.com/$REPO_SLUG/archive/refs/heads/$BRANCH.tar.gz" \
-    | tar -xz -C "$TMP" --strip-components=1 || die "download failed. is the Pi online?"
+  curl -fsSL --retry 2 "https://github.com/$REPO_SLUG/archive/refs/heads/$BRANCH.tar.gz" \
+    | tar -xz -C "$TMP" --strip-components=1 || die "couldn't download vitadock++. is the pi online?"
   SRC=$TMP
 fi
 for f in src/vitadock.py src/vitadock.conf src/vitadock.service src/bt-aplay uninstall.sh VERSION; do
@@ -135,16 +185,21 @@ say "version $NEW"
 
 step "installing packages (takes a few minutes the first time)"
 export DEBIAN_FRONTEND=noninteractive
-as_root apt-get update -q
-as_root apt-get install -y -q mpv v4l-utils alsa-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
-  || die "apt couldn't install the packages. check the Pi is online and try again."
-as_root apt-get install -y -q gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+progress 10 "checking for package updates"
+as_root apt-get update -q || die "couldn't reach the package servers. is the pi online?"
+progress 14 "installing packages"
+apt_install 14 50 mpv v4l-utils alsa-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
+  || die "apt couldn't install the packages it needs. check the pi is online and try again."
+progress 50 "installing the fast player"
+apt_install 50 76 gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   || warn "couldn't install gstreamer, so the dock will use the slower mpv player."
-as_root apt-get install -y -q bluez bluez-alsa-utils bluez-tools \
+progress 76 "installing bluetooth audio bits"
+apt_install 76 84 bluez bluez-alsa-utils bluez-tools \
   || warn "couldn't install the bluetooth audio packages. everything else will still work."
 
 step "copying files"
-as_root install -d -m 755 "$SHARE" "$LIB"
+progress 86 "copying files"
+as_root install -d -m 755 "$SHARE" "$LIB" "$STATE_DIR"
 as_root install -m 644 "$SRC/src/vitadock.py" "$LIB/vitadock.py"
 as_root install -m 755 "$SRC/src/bt-aplay" "$LIB/bt-aplay"
 as_root install -m 755 "$SRC/uninstall.sh" "$SHARE/uninstall.sh"
@@ -177,6 +232,7 @@ VERSION=$NEW
 EOF
 
 step "setting the Pi up to boot into the dock"
+progress 93 "setting up boot"
 sed "s|@REPO@|$REPO_SLUG|" "$SRC/src/vitadock.service" | as_root tee "$UNIT" >/dev/null
 as_root systemctl daemon-reload
 as_root systemctl enable vitadock.service >/dev/null 2>&1
@@ -202,8 +258,10 @@ else
 fi
 
 if [ "$INSTALLED" = yes ]; then
-  as_root systemctl restart vitadock.service
   step "updated to $NEW"
+  printf '%s\n' "$NEW" | as_root tee "$STATE_DIR/just-updated" >/dev/null
+  progress_raw "done|updated to $NEW, restarting the dock"
+  as_root systemctl restart vitadock.service
   exit 0
 fi
 

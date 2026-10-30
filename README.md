@@ -158,7 +158,13 @@ Pair your controller with the **Vita**, since that's what's running the game. Du
 
 ## Updating
 
-Pick *check for updates* in the menu (the Pi needs to be online). It tells you if there's a new version and updates itself. Your settings are kept.
+Pick *check for updates* in the menu (the Pi needs to be online). If there's a new version it asks first, then shows a progress bar while it downloads and installs. When it's done the dock restarts by itself and the waiting screen says what version you're on now. Your settings are kept.
+
+The first update after a big release can take a few minutes, because it has to download new packages. If something goes wrong the update screen tells you what happened and shows the end of the log. The full log is in `/var/log/vitadock-update.log`.
+
+You can also update by running the installer again, either the curl line or `bash install.sh` from a USB stick. It spots the existing install and keeps your settings.
+
+> **On 1.1.0 to 1.3.0?** The update option in those versions was broken. Updating now works, but the old version's screen just says "updating" with no progress bar. Leave it for about 5 to 10 minutes and the dock restarts on the new version. Or run the installer again from USB or with the curl line.
 
 ## Uninstalling
 
@@ -190,6 +196,12 @@ Usually the video format. Edit `/etc/vitadock.conf` (Ctrl+Alt+F2 on a keyboard g
 <summary><b>it feels laggy</b></summary>
 
 Turn on your TV's **game mode** for that HDMI input first, as that's usually the biggest difference. Then check *info + help* says the player is **fast**. If it says compatible, either the fast player isn't installed (re-run the installer or update from the menu) or it didn't work with your setup, which the dock log will show. Use `smooth` mode for 60fps.
+</details>
+
+<details>
+<summary><b>an update failed</b></summary>
+
+The update screen shows the reason and the end of the log. Most of the time it's the Pi not being online, which you can sort out in the menu's *wi-fi* screen. Then try again. The whole log is in `/var/log/vitadock-update.log`. If it keeps failing, run the installer again from a USB stick or with the curl line.
 </details>
 
 <details>
