@@ -20,6 +20,8 @@ LIB = "/usr/local/lib/vitadock"
 INFO = SHARE + "/install-info"
 SYS_DRM = os.environ.get("VITADOCK_SYS_DRM", "/sys/class/drm")
 SYS_V4L = os.environ.get("VITADOCK_SYS_V4L", "/sys/class/video4linux")
+SYS_SOUND = os.environ.get("VITADOCK_SYS_SOUND", "/sys/class/sound")
+PROC_ASOUND = os.environ.get("VITADOCK_PROC_ASOUND", "/proc/asound")
 DEV_GLOB = os.environ.get("VITADOCK_DEV_GLOB", "/dev/video*")
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 
@@ -35,6 +37,7 @@ DEFAULTS = {
     "AUDIO_PCM": "auto",
     "EXTRA_MPV_ARGS": "",
     "PLAYER": "fast",
+    "USB_AUDIO": "auto",
 }
 
 VIDEO_MODES = [
@@ -169,6 +172,53 @@ def find_vita():
         if "Size: Discrete 960x544" in v4l2(dev, "--list-formats-ext"):
             return dev
     return None
+
+
+def usb_device_of(sysfs_node):
+    real = os.path.realpath(sysfs_node)
+    if "/usb" not in real:
+        return None
+    return os.path.dirname(real) if ":" in os.path.basename(real) else real
+
+
+def vita_audio_card(vita):
+    if not vita:
+        return None
+    usb = usb_device_of(os.path.join(SYS_V4L, os.path.basename(vita), "device"))
+    if not usb:
+        return None
+    for card in sorted(glob.glob(SYS_SOUND + "/card*")):
+        name = os.path.basename(card)
+        if not re.match(r"^card\d+$", name):
+            continue
+        if usb_device_of(os.path.join(card, "device")) != usb:
+            continue
+        n = name[4:]
+        if not glob.glob("%s/card%s/pcm*c" % (PROC_ASOUND, n)):
+            continue
+        try:
+            with open("%s/card%s/id" % (PROC_ASOUND, n)) as f:
+                cid = f.read().strip()
+        except OSError:
+            cid = ""
+        return "hw:CARD=%s,DEV=0" % cid if cid else "hw:%s,0" % n
+    return None
+
+
+def hdmi_pcm(cfg, disp):
+    if cfg.get("AUDIO_PCM", "auto") not in ("", "auto"):
+        return cfg["AUDIO_PCM"]
+    m = re.match(r"^HDMI-A-(\d+)$", disp[1] if disp else "")
+    return "hdmi:CARD=vc4hdmi%d,DEV=0" % (int(m.group(1)) - 1) if m else "default"
+
+
+def audio_command(capture, playback):
+    return ["alsaloop", "-C", capture, "-P", playback, "-c", "2", "-r", "48000",
+            "-f", "S16_LE", "-t", "30000"]
+
+
+def usb_audio_wanted(cfg):
+    return cfg.get("USB_AUDIO", "auto") != "off"
 
 
 def pick_pixfmt(cfg, dev):
@@ -629,6 +679,7 @@ class State:
         self.out_mode = ""
         self.vita = None
         self.pixfmt = ""
+        self.vita_audio = None
         self.error = ""
         self.confirm = None
         self.msg = None
@@ -662,6 +713,7 @@ def build_menu(st):
         items.append(("scaler", "upscaling", cfg["SCALER"]))
     items.append(("output", "tv resolution", cfg["OUTPUT_MODE"]))
     items.append(("wifi", "wi-fi", st.wifi_label or "..."))
+    items.append(("usbaudio", "usb audio", "on" if usb_audio_wanted(cfg) else "off"))
     items.append(("audio", "bluetooth audio", "on" if cfg["BT_AUDIO"] == "yes" else "off"))
     if cfg["BT_AUDIO"] == "yes":
         items.append(("pair", "pair the vita for audio", ""))
@@ -688,6 +740,9 @@ def item_help(st, key):
     return {
         "back": "the game picks up where it was" if st.vita else "back to the waiting screen",
         "wifi": "join a network, or see which one the pi is on",
+        "usbaudio": ("sound over the usb cable. needs the vitastream or VitaUSBStream plugin"
+                     + (", and your vita isn't sending any" if st.vita and not st.vita_audio and usb_audio_wanted(cfg)
+                        else ". working" if st.vita_audio and usb_audio_wanted(cfg) else "")),
         "audio": "vita sound over bluetooth, out of the tv. still a bit experimental",
         "pair": "do this once, then connect from the vita's bluetooth menu",
         "info": "ip address, what's plugged in, controls",
@@ -728,6 +783,14 @@ def dotted(g, x, y, key, value, width, color=FG):
     g.text(x + width, y, value, "body", color, "r")
 
 
+def audio_desc(st):
+    if st.vita_audio and usb_audio_wanted(st.cfg):
+        return "usb, from the vita"
+    if st.cfg["BT_AUDIO"] == "yes":
+        return "bluetooth"
+    return "cable from the vita"
+
+
 def draw_home(g, st):
     u = g.u
     draw_chrome(g, st, "enter / click / (A) . . . settings")
@@ -752,7 +815,7 @@ def draw_home(g, st):
     dotted(g, tx, y, "tv", tv, width)
     dotted(g, tx, y + lh * 1.3, "vita", st.vita or "not plugged in", width, FG if st.vita else DIM)
     dotted(g, tx, y + lh * 2.6, "mode", "%s (%s @ %s)" % (mode_name(st.cfg), st.cfg["VITA_MODE"], st.cfg["VITA_FPS"]), width)
-    dotted(g, tx, y + lh * 3.9, "audio", "bluetooth" if st.cfg["BT_AUDIO"] == "yes" else "cable from the vita", width)
+    dotted(g, tx, y + lh * 3.9, "audio", audio_desc(st), width)
     if st.error:
         g.text(tx, y + lh * 5.6, st.error, "small", BAD)
 
@@ -853,6 +916,7 @@ def draw_info(g, st):
         ("tv", "%s at %s" % (st.disp[1], st.out_mode) if st.disp else "none"),
         ("vita", "%s (%s)" % (st.vita, st.pixfmt or "default format") if st.vita else "not plugged in"),
         ("player", ("fast" if st.cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)")),
+        ("sound", "usb (%s)" % st.vita_audio if st.vita_audio and usb_audio_wanted(st.cfg) else audio_desc(st)),
         ("settings file", CONF),
     ]
     for k, v in rows:
@@ -1265,6 +1329,31 @@ class Dock:
             self.last_note = msg
 
 
+    def start_audio(self):
+        st = self.st
+        if not usb_audio_wanted(st.cfg):
+            return None
+        if not st.vita_audio:
+            st.vita_audio = vita_audio_card(st.vita)
+        if not st.vita_audio or not shutil.which("alsaloop"):
+            return None
+        out = hdmi_pcm(st.cfg, st.disp)
+        log("usb audio %s -> %s" % (st.vita_audio, out))
+        try:
+            return subprocess.Popen(audio_command(st.vita_audio, out),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+        except OSError as e:
+            log("couldn't start usb audio: %s" % e)
+            return None
+
+    def stop_audio(self, audio):
+        if audio and audio.poll() is None:
+            audio.terminate()
+            try:
+                audio.wait(2)
+            except subprocess.TimeoutExpired:
+                audio.kill()
+
     def pick_player(self):
         if self.st.cfg["PLAYER"] == "fast" and not self.gst_broken and gst_available():
             return "fast"
@@ -1284,6 +1373,7 @@ class Dock:
         self.screen.close()
         started = time.time()
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
+        audio = self.start_audio()
         stop, hit = threading.Event(), threading.Event()
         t = threading.Thread(target=self.hotkeys.watch, args=(stop, hit), daemon=True)
         t.start()
@@ -1298,6 +1388,7 @@ class Dock:
             time.sleep(0.05)
         stop.set()
         t.join(2)
+        self.stop_audio(audio)
         ran = time.time() - started
         self.last_note = ""
         if hit.is_set():
@@ -1512,6 +1603,8 @@ class Dock:
                     apply_output_mode(load_config())
                 except OSError as e:
                     log("couldn't update cmdline.txt: %s" % e)
+        elif key == "usbaudio":
+            set_config("USB_AUDIO", "off" if usb_audio_wanted(cfg) else "auto")
         elif key == "player":
             set_config("PLAYER", "compatible" if cfg["PLAYER"] == "fast" else "fast")
             self.gst_broken = False
@@ -1523,7 +1616,7 @@ class Dock:
         if key == "back":
             st.screen = "home"
             self.retry_at = 0
-        elif key in ("mode", "scaler", "output", "player"):
+        elif key in ("mode", "scaler", "output", "player", "usbaudio"):
             self.cycle(key, 1)
         elif key == "audio":
             if st.cfg["BT_AUDIO"] == "yes":
@@ -1666,7 +1759,7 @@ class Dock:
                 st.sel = (st.sel - 1) % n
             elif kind == "DOWN":
                 st.sel = (st.sel + 1) % n
-            elif kind in ("LEFT", "RIGHT") and key in ("mode", "scaler", "output", "player"):
+            elif kind in ("LEFT", "RIGHT") and key in ("mode", "scaler", "output", "player", "usbaudio"):
                 self.cycle(key, -1 if kind == "LEFT" else 1)
             elif kind == "OK":
                 self.activate(key)
@@ -1765,6 +1858,7 @@ class Dock:
                 if vita != st.vita:
                     st.vita = vita
                     st.pixfmt = pick_pixfmt(st.cfg, vita) if vita else ""
+                    st.vita_audio = vita_audio_card(vita)
                     self.dirty = True
                     if st.screen == "menu":
                         build_menu(st)
@@ -1796,8 +1890,11 @@ def cmd_status():
     print("tv     %s" % ("%s %s (%s)" % (disp[0], disp[1], pick_output_mode(cfg, disp[2])) if disp else "none"))
     print("vita   %s" % ("%s (%s)" % (vita, pick_pixfmt(cfg, vita) or "default") if vita else "not plugged in"))
     print("mode   %s (%s @ %s)" % (mode_name(cfg), cfg["VITA_MODE"], cfg["VITA_FPS"]))
-    print("audio  %s" % ("bluetooth" if cfg["BT_AUDIO"] == "yes" else "off"))
+    print("bt     %s" % ("on" if cfg["BT_AUDIO"] == "yes" else "off"))
     print("player %s" % ("fast (gstreamer)" if cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)"))
+    va = vita_audio_card(vita)
+    print("sound  %s" % ("usb from the vita, %s -> %s" % (va, hdmi_pcm(cfg, disp)) if va and usb_audio_wanted(cfg)
+                         else "bluetooth" if cfg["BT_AUDIO"] == "yes" else "no usb audio from the vita"))
 
 
 def cmd_screenshot(outdir):

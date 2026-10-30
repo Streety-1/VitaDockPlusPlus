@@ -136,7 +136,7 @@ say "version $NEW"
 step "installing packages (takes a few minutes the first time)"
 export DEBIAN_FRONTEND=noninteractive
 as_root apt-get update -q
-as_root apt-get install -y -q mpv v4l-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
+as_root apt-get install -y -q mpv v4l-utils alsa-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
   || die "apt couldn't install the packages. check the Pi is online and try again."
 as_root apt-get install -y -q gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   || warn "couldn't install gstreamer, so the dock will use the slower mpv player."
