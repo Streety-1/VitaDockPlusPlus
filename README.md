@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/raspberry%20pi-5-f0b648?style=flat-square&labelColor=16171b" alt="Raspberry Pi 5">
   <img src="https://img.shields.io/badge/pi%20os-lite%2064--bit-f0b648?style=flat-square&labelColor=16171b" alt="Pi OS Lite 64-bit">
-  <img src="https://img.shields.io/github/v/release/Streety-1/VitaDockPlusPlus?style=flat-square&labelColor=16171b&color=e2dfd6&label=release" alt="latest release">
+  <a href="https://github.com/Streety-1/VitaDockPlusPlus/releases/latest"><img src="https://img.shields.io/github/v/release/Streety-1/VitaDockPlusPlus?style=flat-square&labelColor=16171b&color=e2dfd6&label=release" alt="latest release"></a>
   <img src="https://img.shields.io/badge/license-MIT-e2dfd6?style=flat-square&labelColor=16171b" alt="MIT licence">
 </p>
 
