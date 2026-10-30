@@ -58,7 +58,7 @@ If the Vita won't boot after this, hold **L** while it starts up. That skips plu
 
 ## Installing on the Pi
 
-1. Flash **Raspberry Pi OS Lite (64-bit)** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). In the settings, set a username and password, and add your Wi-Fi if you're not using ethernet. It needs internet for the install.
+1. Flash **Raspberry Pi OS Lite (64-bit)** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). In the settings, set a username and password, and add your Wi-Fi if you're not using ethernet. It needs internet for the install. You can change the Wi-Fi later from the dock's menu.
 2. Put the card in the Pi, plug in a keyboard and the TV, and log in.
 3. Run this:
    ```
@@ -105,6 +105,7 @@ The menu has:
 
 - **Upscaling.** lanczos (sharpest), spline36 or bilinear (softest).
 - **TV resolution.** 1080p by default. You can also pick 720p, 4K or whatever your TV prefers.
+- **Wi-Fi.** Shows which network the Pi is on and lets you join a different one. Type the password on a keyboard, or use the on-screen keyboard if you've only got a pad or mouse. You can also forget networks or turn Wi-Fi off from here.
 - **Bluetooth audio** and pairing (see [sound](#sound)).
 - **Info + help.** Shows what the Pi can see: the TV, the Vita and its IP address.
 - **Check for updates**, restart, shut down and uninstall.

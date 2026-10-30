@@ -308,6 +308,145 @@ class Pairing:
         sh(["bluetoothctl", "discoverable", "off"])
 
 
+def wifi_available():
+    return shutil.which("nmcli") is not None
+
+
+def nm_split(line):
+    out, cur, esc = [], "", False
+    for ch in line:
+        if esc:
+            cur += ch
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return out
+
+
+def wifi_radio_on():
+    return sh(["nmcli", "radio", "wifi"]).stdout.strip() == "enabled"
+
+
+def wifi_set_radio(on):
+    r = sh(["nmcli", "radio", "wifi", "on" if on else "off"])
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout).strip() or "nmcli failed")
+    if on:
+        time.sleep(4)
+
+
+def wifi_device():
+    for line in sh(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"]).stdout.splitlines():
+        f = nm_split(line)
+        if len(f) >= 2 and f[1] == "wifi":
+            return f[0]
+    return "wlan0"
+
+
+def wifi_known():
+    known = {}
+    for line in sh(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"]).stdout.splitlines():
+        f = nm_split(line)
+        if len(f) >= 2 and f[1] in ("802-11-wireless", "wifi"):
+            ssid = nm_split(sh(["nmcli", "-t", "-g", "802-11-wireless.ssid",
+                                "connection", "show", f[0]]).stdout.strip())[0]
+            known[ssid or f[0]] = f[0]
+    return known
+
+
+def wifi_scan(rescan=True):
+    out = sh(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list",
+              "--rescan", "yes" if rescan else "no"], timeout=30).stdout
+    known = wifi_known()
+    nets = {}
+    for line in out.splitlines():
+        f = nm_split(line)
+        if len(f) < 4 or not f[1]:
+            continue
+        ssid = f[1]
+        sig = int(f[2]) if f[2].isdigit() else 0
+        old = nets.get(ssid, {"signal": 0, "active": False})
+        nets[ssid] = {"ssid": ssid,
+                      "signal": max(sig, old["signal"]),
+                      "secure": f[3].strip() not in ("", "--"),
+                      "active": f[0].strip() == "*" or old["active"],
+                      "known": ssid in known}
+    return sorted(nets.values(), key=lambda n: (not n["active"], -n["signal"], n["ssid"].lower()))
+
+
+def wifi_label():
+    if not wifi_available():
+        return "n/a"
+    if not wifi_radio_on():
+        return "off"
+    for n in wifi_scan(rescan=False):
+        if n["active"]:
+            return n["ssid"] if len(n["ssid"]) <= 22 else n["ssid"][:21] + "~"
+    return "not connected"
+
+
+def nm_error(text):
+    t = (text or "").strip()
+    low = t.lower()
+    if "secrets were required" in low or "802-1x" in low or "password" in low or "authentication" in low:
+        return "wrong password, or the network turned it down."
+    if "no network with ssid" in low:
+        return "can't see that network any more. scan again?"
+    if "timeout" in low or "timed out" in low:
+        return "it took too long to connect. is the signal ok?"
+    line = t.splitlines()[-1] if t else "nmcli failed"
+    return line.replace("Error: ", "")[:70].lower()
+
+
+def wifi_connect(ssid, password=None):
+    known = wifi_known()
+    if password is None and ssid in known:
+        r = sh(["nmcli", "connection", "up", "id", known[ssid]], timeout=60)
+    else:
+        if ssid in known:
+            sh(["nmcli", "connection", "delete", "id", known[ssid]])
+        cmd = ["nmcli", "device", "wifi", "connect", ssid, "ifname", wifi_device()]
+        if password:
+            cmd += ["password", password]
+        r = sh(cmd, timeout=60)
+    if r.returncode != 0:
+        raise RuntimeError(nm_error(r.stderr or r.stdout))
+
+
+def wifi_forget(ssid):
+    known = wifi_known()
+    if ssid in known:
+        r = sh(["nmcli", "connection", "delete", "id", known[ssid]])
+    else:
+        r = sh(["nmcli", "device", "disconnect", wifi_device()])
+    if r.returncode != 0:
+        raise RuntimeError(nm_error(r.stderr or r.stdout))
+
+
+def signal_bars(sig):
+    n = 4 if sig >= 75 else 3 if sig >= 50 else 2 if sig >= 30 else 1
+    return "\u2582\u2584\u2586\u2588"[:n] + " " * (4 - n)
+
+
+KB_LAYERS = {
+    "abc": ["1234567890", "qwertyuiop", "asdfghjkl@", "zxcvbnm._-"],
+    "ABC": ["1234567890", "QWERTYUIOP", "ASDFGHJKL@", "ZXCVBNM._-"],
+    "#+=": ["1234567890", "!\"#$%&'()*", "+,/:;<=>?@", "[\\]^_`{|}~"],
+}
+KB_NEXT = {"abc": "ABC", "ABC": "#+=", "#+=": "abc"}
+KB_SPECIAL = ["layer", "space", "del", "show", "connect", "cancel"]
+
+
+def kb_cols(row):
+    return len(KB_SPECIAL) if row == 4 else 10
+
+
 BG = (22, 23, 27)
 FG = (226, 223, 214)
 DIM = (120, 122, 128)
@@ -433,6 +572,19 @@ class State:
         self.hits = []
         self.ver = version()
         self.ips = []
+        self.wifi_label = ""
+        self.wifi_on = True
+        self.wifi_nets = []
+        self.wifi_items = []
+        self.wsel = 0
+        self.wifi_status = ""
+        self.text = ""
+        self.text_target = ""
+        self.text_error = ""
+        self.show_pw = False
+        self.kb_layer = "abc"
+        self.kb_r = 1
+        self.kb_c = 0
 
 
 def build_menu(st):
@@ -441,6 +593,7 @@ def build_menu(st):
     items.append(("mode", "video mode", mode_name(cfg)))
     items.append(("scaler", "upscaling", cfg["SCALER"]))
     items.append(("output", "tv resolution", cfg["OUTPUT_MODE"]))
+    items.append(("wifi", "wi-fi", st.wifi_label or "..."))
     items.append(("audio", "bluetooth audio", "on" if cfg["BT_AUDIO"] == "yes" else "off"))
     if cfg["BT_AUDIO"] == "yes":
         items.append(("pair", "pair the vita for audio", ""))
@@ -466,6 +619,7 @@ def item_help(st, key):
         return dict(OUTPUTS).get(cfg["OUTPUT_MODE"], "custom, from vitadock.conf")
     return {
         "back": "the game picks up where it was" if st.vita else "back to the waiting screen",
+        "wifi": "join a network, or see which one the pi is on",
         "audio": "vita sound over bluetooth, out of the tv. still a bit experimental",
         "pair": "do this once, then connect from the vita's bluetooth menu",
         "info": "ip address, what's plugged in, controls",
@@ -641,9 +795,129 @@ def draw_info(g, st):
         y += lh
 
 
+def build_wifi(st):
+    items = [("radio", "wi-fi", "on" if st.wifi_on else "off", None)]
+    if st.wifi_on:
+        for n in st.wifi_nets:
+            name = n["ssid"] if len(n["ssid"]) <= 30 else n["ssid"][:29] + "~"
+            if n["active"]:
+                value = "connected"
+            else:
+                tag = "saved" if n["known"] else "locked" if n["secure"] else "open"
+                value = "%s  %s" % (tag, signal_bars(n["signal"]))
+            items.append(("net", name, value, n))
+        items.append(("scan", "scan again", "", None))
+    items.append(("back", "back", "", None))
+    st.wifi_items = items
+    st.wsel = min(st.wsel, len(items) - 1)
+    cur = [n["ssid"] for n in st.wifi_nets if n["active"]]
+    if not st.wifi_on:
+        st.wifi_status = "wi-fi is off"
+    elif cur:
+        st.wifi_status = "on " + cur[0]
+    else:
+        st.wifi_status = "not connected"
+
+
+def wifi_help(st):
+    if not st.wifi_items:
+        return ""
+    key, _, _, n = st.wifi_items[st.wsel]
+    if key == "radio":
+        return "turn it off if you only use ethernet. updates need some kind of internet."
+    if key == "scan":
+        return "look for networks again"
+    if key == "net" and n:
+        if n["active"]:
+            return "select to forget this network"
+        if n["known"]:
+            return "saved already, select to connect"
+        return "select to type the password" if n["secure"] else "no password needed"
+    return ""
+
+
+def draw_wifi(g, st):
+    u, W, H = g.u, g.w, g.h
+    draw_chrome(g, st, "up/down move   enter select   esc back")
+    st.hits = []
+    x = 120 * u
+    w = W - 240 * u
+    y = 96 * u
+    g.text(x, y, "wi-fi", "small", DIM)
+    g.text(x + w, y, st.wifi_status, "small", DIM, "r")
+    y += 34 * u
+    row = 40 * u
+    pad = 14 * u
+    items = st.wifi_items
+    fits = max(3, int((H - 140 * u - y) / row))
+    top = max(0, min(st.wsel - fits // 2, len(items) - fits))
+    for i in range(top, min(len(items), top + fits)):
+        key, label, value, n = items[i]
+        sel = i == st.wsel
+        if sel:
+            g.rect(x - pad, y - 6 * u, w + 2 * pad, row, ACCENT)
+        color = ACCENT_FG if sel else FG
+        g.text(x, y, ("> " if sel else "  ") + label, "body", color)
+        if value:
+            vcol = ACCENT_FG if sel else (GOOD if value == "connected" else DIM)
+            g.text(x + w, y, value, "body", vcol, "r")
+        st.hits.append((x - pad, y - 6 * u, w + 2 * pad, row, i))
+        y += row
+    if top + fits < len(items):
+        g.text(x, y, "  ...", "body", DIM)
+    tip = wifi_help(st)
+    if tip:
+        g.text(x, y + 18 * u, tip, "small", DIM)
+
+
+def kb_label(st, c):
+    k = KB_SPECIAL[c]
+    if k == "layer":
+        return KB_NEXT[st.kb_layer]
+    if k == "show":
+        return "hide" if st.show_pw else "show"
+    return k
+
+
+def draw_text(g, st):
+    u, W = g.u, g.w
+    draw_chrome(g, st, "type, or use the keys   enter connect   (B) delete   esc cancel")
+    st.hits = []
+    x = 120 * u
+    fw = W - 240 * u
+    y = 96 * u
+    g.text(x, y, "password for '%s'" % st.text_target, "body", FG)
+    y += 44 * u
+    fh = 56 * u
+    g.rect(x, y, fw, fh, FAINT)
+    g.rect(x + 2 * u, y + 2 * u, fw - 4 * u, fh - 4 * u, BG)
+    shown = st.text if st.show_pw else "*" * len(st.text)
+    g.text(x + 16 * u, y + 14 * u, shown + "_", "body", FG)
+    g.text(x + fw - 16 * u, y + 17 * u, "%d" % len(st.text), "small", DIM, "r")
+    if st.text_error:
+        g.text(x, y + fh + 10 * u, st.text_error, "small", BAD)
+    y += fh + 48 * u
+    kh = 46 * u
+    gap = 8 * u
+    rows = KB_LAYERS[st.kb_layer]
+    for r in range(5):
+        n = kb_cols(r)
+        kw = fw / n
+        for c in range(n):
+            label = rows[r][c] if r < 4 else kb_label(st, c)
+            kx = x + c * kw
+            ky = y + r * (kh + gap)
+            sel = (st.kb_r, st.kb_c) == (r, c)
+            g.rect(kx + 3 * u, ky, kw - 6 * u, kh, ACCENT if sel else FAINT)
+            g.text(kx + kw / 2, ky + 10 * u, label, "body" if r < 4 else "small",
+                   ACCENT_FG if sel else FG, "c")
+            st.hits.append((kx, ky, kw, kh, (r, c)))
+
+
 def draw(g, st):
     {"home": draw_home, "menu": draw_menu, "confirm": draw_confirm, "msg": draw_message,
-     "busy": draw_message, "pair": draw_pair, "info": draw_info}[st.screen](g, st)
+     "busy": draw_message, "pair": draw_pair, "info": draw_info,
+     "wifi": draw_wifi, "text": draw_text}[st.screen](g, st)
 
 
 class PygameInput:
@@ -654,6 +928,7 @@ class PygameInput:
         self.pads = {}
         self.ctl_ids = set()
         self.axis = {}
+        self.text_mode = False
         try:
             from pygame._sdl2 import controller
             controller.init()
@@ -682,12 +957,43 @@ class PygameInput:
         self.axis[key] = new
         return new if new != old else 0
 
+    def set_text_mode(self, on):
+        if on != self.text_mode:
+            self.text_mode = on
+            try:
+                (self.pg.key.start_text_input if on else self.pg.key.stop_text_input)()
+            except Exception:
+                pass
+
     def actions(self):
         pg = self.pg
         out = []
-        for e in pg.event.get():
+        events = pg.event.get()
+        got_text = any(e.type == pg.TEXTINPUT for e in events)
+        for e in events:
             t = e.type
-            if t == pg.KEYDOWN:
+            if t == pg.TEXTINPUT:
+                if self.text_mode:
+                    out.append(("TEXT", e.text))
+            elif t == pg.KEYDOWN and self.text_mode:
+                k = e.key
+                if k == pg.K_UP:
+                    out.append(("UP",))
+                elif k == pg.K_DOWN:
+                    out.append(("DOWN",))
+                elif k == pg.K_LEFT:
+                    out.append(("LEFT",))
+                elif k == pg.K_RIGHT:
+                    out.append(("RIGHT",))
+                elif k in (pg.K_RETURN, pg.K_KP_ENTER):
+                    out.append(("OK", "key"))
+                elif k == pg.K_ESCAPE:
+                    out.append(("BACK", "esc"))
+                elif k == pg.K_BACKSPACE:
+                    out.append(("BACK", "bksp"))
+                elif not got_text and getattr(e, "unicode", "") and e.unicode.isprintable():
+                    out.append(("TEXT", e.unicode))
+            elif t == pg.KEYDOWN:
                 k = e.key
                 if k in (pg.K_UP, pg.K_w):
                     out.append(("UP",))
@@ -698,9 +1004,11 @@ class PygameInput:
                 elif k in (pg.K_RIGHT, pg.K_d):
                     out.append(("RIGHT",))
                 elif k in (pg.K_RETURN, pg.K_KP_ENTER, pg.K_SPACE):
-                    out.append(("OK",))
-                elif k in (pg.K_ESCAPE, pg.K_BACKSPACE):
-                    out.append(("BACK",))
+                    out.append(("OK", "key"))
+                elif k == pg.K_ESCAPE:
+                    out.append(("BACK", "esc"))
+                elif k == pg.K_BACKSPACE:
+                    out.append(("BACK", "bksp"))
                 else:
                     out.append(("ANY",))
             elif t == pg.MOUSEMOTION:
@@ -709,7 +1017,7 @@ class PygameInput:
             elif t == pg.MOUSEBUTTONDOWN and e.button == 1:
                 out.append(("CLICK", e.pos))
             elif t == pg.MOUSEBUTTONDOWN and e.button == 3:
-                out.append(("BACK",))
+                out.append(("BACK", "esc"))
             elif t == pg.MOUSEWHEEL:
                 out.append(("UP",) if e.y > 0 else ("DOWN",))
             elif t == pg.JOYDEVICEADDED:
@@ -719,12 +1027,12 @@ class PygameInput:
                 self.ctl_ids.discard(e.instance_id)
             elif t == getattr(pg, "CONTROLLERBUTTONDOWN", -1):
                 b = e.button
-                m = {pg.CONTROLLER_BUTTON_A: "OK", pg.CONTROLLER_BUTTON_START: "OK",
-                     pg.CONTROLLER_BUTTON_B: "BACK", pg.CONTROLLER_BUTTON_BACK: "BACK",
-                     pg.CONTROLLER_BUTTON_GUIDE: "BACK",
-                     pg.CONTROLLER_BUTTON_DPAD_UP: "UP", pg.CONTROLLER_BUTTON_DPAD_DOWN: "DOWN",
-                     pg.CONTROLLER_BUTTON_DPAD_LEFT: "LEFT", pg.CONTROLLER_BUTTON_DPAD_RIGHT: "RIGHT"}
-                out.append((m.get(b, "ANY"),))
+                m = {pg.CONTROLLER_BUTTON_A: ("OK",), pg.CONTROLLER_BUTTON_START: ("SUBMIT",),
+                     pg.CONTROLLER_BUTTON_B: ("BACK",), pg.CONTROLLER_BUTTON_BACK: ("BACK", "esc"),
+                     pg.CONTROLLER_BUTTON_GUIDE: ("BACK", "esc"),
+                     pg.CONTROLLER_BUTTON_DPAD_UP: ("UP",), pg.CONTROLLER_BUTTON_DPAD_DOWN: ("DOWN",),
+                     pg.CONTROLLER_BUTTON_DPAD_LEFT: ("LEFT",), pg.CONTROLLER_BUTTON_DPAD_RIGHT: ("RIGHT",)}
+                out.append(m.get(b, ("ANY",)))
             elif t == getattr(pg, "CONTROLLERAXISMOTION", -1):
                 if e.axis == pg.CONTROLLER_AXIS_LEFTY:
                     d = self._stick(("c", e.instance_id, "y"), e.value / 32767.0)
@@ -922,18 +1230,155 @@ class Dock:
         self.dirty = True
 
 
-    def open_menu(self):
+    def open_menu(self, sel=0):
         st = self.st
-        st.screen, st.sel = "menu", 0
+        try:
+            st.wifi_label = wifi_label()
+        except Exception as e:
+            log("wi-fi status failed: %s" % e)
+            st.wifi_label = "?"
+        st.screen, st.sel = "menu", sel
         build_menu(st)
 
-    def message(self, title, *lines):
-        self.st.msg = {"title": title, "lines": list(lines)}
+    def message(self, title, *lines, back="menu"):
+        self.st.msg = {"title": title, "lines": list(lines), "back": back}
         self.st.screen = "msg"
 
-    def ask(self, lines, yes):
-        self.st.confirm = {"lines": lines, "yes": yes, "sel": 0}
+    def ask(self, lines, yes, back="menu"):
+        self.st.confirm = {"lines": lines, "yes": yes, "sel": 0, "back": back}
         self.st.screen = "confirm"
+
+    def go_back(self, where):
+        if where == "wifi":
+            build_wifi(self.st)
+            self.st.screen = "wifi"
+        else:
+            keys = [k for k, _, _ in self.st.items]
+            self.open_menu(keys.index("wifi") if where == "menu-wifi" and "wifi" in keys else 0)
+
+
+    def open_wifi(self, rescan=True):
+        st = self.st
+        if not wifi_available():
+            self.message("can't manage wi-fi here", "this pi isn't using networkmanager (nmcli),",
+                         "which pi os lite normally does.")
+            return
+
+        def scan():
+            st.wifi_on = wifi_radio_on()
+            st.wifi_nets = wifi_scan(rescan) if st.wifi_on else []
+
+        if self.busy("looking for wi-fi networks" if rescan else "checking wi-fi", scan):
+            st.wsel = 0
+            self.go_back("wifi")
+
+    def wifi_activate(self):
+        st = self.st
+        key, _, _, n = st.wifi_items[st.wsel]
+        if key == "radio":
+            on = not st.wifi_on
+            if self.busy("turning wi-fi " + ("on" if on else "off"), lambda: wifi_set_radio(on)):
+                self.open_wifi(rescan=on)
+        elif key == "scan":
+            self.open_wifi(True)
+        elif key == "back":
+            self.go_back("menu-wifi")
+        elif key == "net":
+            ssid = n["ssid"]
+            if n["active"]:
+                self.ask(["forget '%s'?" % ssid, "",
+                          "the pi disconnects and won't join it again",
+                          "until you put the password back in."],
+                         lambda: self.wifi_forget(ssid), back="wifi")
+            elif n["known"] or not n["secure"]:
+                self.wifi_join(ssid)
+            else:
+                self.start_text(ssid)
+
+    def start_text(self, ssid, error=""):
+        st = self.st
+        st.text, st.text_target, st.text_error = "", ssid, error
+        st.show_pw, st.kb_layer, st.kb_r, st.kb_c = False, "abc", 1, 0
+        st.screen = "text"
+
+    def wifi_join(self, ssid, password=None):
+        st = self.st
+        st.screen, st.busy = "busy", "connecting to " + ssid
+        self.redraw(force=True)
+        try:
+            wifi_connect(ssid, password)
+        except Exception as e:
+            log("wi-fi connect to %s failed: %s" % (ssid, e))
+            if password is not None or any(n["ssid"] == ssid and n["secure"] for n in st.wifi_nets):
+                self.start_text(ssid, str(e) if password is not None else
+                                "the saved password didn't work, type it again.")
+            else:
+                self.message("couldn't connect", str(e), back="wifi")
+            return
+        time.sleep(2)
+        try:
+            st.wifi_nets = wifi_scan(rescan=False)
+        except Exception:
+            pass
+        st.ips = ip_addresses()
+        self.message("connected to " + ssid,
+                     "ip address: " + (", ".join(st.ips) or "still getting one"), back="wifi")
+
+    def wifi_forget(self, ssid):
+        if self.busy("forgetting " + ssid, lambda: wifi_forget(ssid)):
+            self.open_wifi(rescan=False)
+
+    def kb_press(self):
+        st = self.st
+        if st.kb_r < 4:
+            self.type_text(KB_LAYERS[st.kb_layer][st.kb_r][st.kb_c])
+            return
+        k = KB_SPECIAL[st.kb_c]
+        if k == "layer":
+            st.kb_layer = KB_NEXT[st.kb_layer]
+        elif k == "space":
+            self.type_text(" ")
+        elif k == "del":
+            st.text = st.text[:-1]
+        elif k == "show":
+            st.show_pw = not st.show_pw
+        elif k == "connect":
+            self.submit_text()
+        elif k == "cancel":
+            self.go_back("wifi")
+
+    def type_text(self, s):
+        st = self.st
+        st.text = (st.text + s)[:63]
+        st.text_error = ""
+
+    def submit_text(self):
+        st = self.st
+        if len(st.text) < 8:
+            st.text_error = "wi-fi passwords are at least 8 characters."
+            return
+        self.wifi_join(st.text_target, st.text)
+
+    def handle_text(self, action):
+        st = self.st
+        kind = action[0]
+        extra = action[1] if len(action) > 1 else None
+        if kind == "TEXT":
+            self.type_text(action[1])
+        elif kind in ("UP", "DOWN"):
+            old = kb_cols(st.kb_r)
+            st.kb_r = (st.kb_r + (1 if kind == "DOWN" else -1)) % 5
+            st.kb_c = min(int((st.kb_c + 0.5) * kb_cols(st.kb_r) / old), kb_cols(st.kb_r) - 1)
+        elif kind in ("LEFT", "RIGHT"):
+            st.kb_c = (st.kb_c + (1 if kind == "RIGHT" else -1)) % kb_cols(st.kb_r)
+        elif kind == "SUBMIT" or (kind == "OK" and extra == "key"):
+            self.submit_text()
+        elif kind == "OK":
+            self.kb_press()
+        elif kind == "BACK" and extra == "esc":
+            self.go_back("wifi")
+        elif kind == "BACK":
+            st.text = st.text[:-1]
 
     def busy(self, text, fn):
         st = self.st
@@ -987,6 +1432,8 @@ class Dock:
         elif key == "info":
             st.ips = ip_addresses()
             st.screen = "info"
+        elif key == "wifi":
+            self.open_wifi(True)
         elif key == "update":
             self.check_update()
         elif key == "reboot":
@@ -1064,26 +1511,43 @@ class Dock:
         kind = action[0]
         self.dirty = True
         if kind == "HOVER":
-            if st.screen in ("menu", "confirm"):
-                i = self.hit(action[1])
-                if i is not None:
-                    if st.screen == "menu":
-                        st.sel = i
-                    else:
-                        st.confirm["sel"] = i
+            i = self.hit(action[1])
+            if i is not None:
+                if st.screen == "menu":
+                    st.sel = i
+                elif st.screen == "wifi":
+                    st.wsel = i
+                elif st.screen == "confirm":
+                    st.confirm["sel"] = i
+                elif st.screen == "text":
+                    st.kb_r, st.kb_c = i
             return
         if kind == "CLICK":
             i = self.hit(action[1])
             if st.screen == "menu" and i is not None:
                 st.sel = i
                 kind = "OK"
+            elif st.screen == "wifi" and i is not None:
+                st.wsel = i
+                kind = "OK"
             elif st.screen == "confirm" and i is not None:
                 st.confirm["sel"] = i
                 kind = "OK"
+            elif st.screen == "text" and i is not None:
+                st.kb_r, st.kb_c = i
+                self.kb_press()
+                return
             elif st.screen in ("home", "msg", "info"):
                 kind = "OK"
             else:
                 return
+        if st.screen == "text":
+            self.handle_text(action)
+            return
+        if kind == "TEXT":
+            return
+        if kind == "SUBMIT":
+            kind = "OK"
 
         if st.screen == "home":
             self.open_menu()
@@ -1101,17 +1565,34 @@ class Dock:
             elif kind == "BACK":
                 st.screen = "home"
                 self.retry_at = 0
+        elif st.screen == "wifi":
+            n = len(st.wifi_items)
+            if kind == "UP":
+                st.wsel = (st.wsel - 1) % n
+            elif kind == "DOWN":
+                st.wsel = (st.wsel + 1) % n
+            elif kind == "OK":
+                self.wifi_activate()
+            elif kind == "BACK":
+                self.go_back("menu-wifi")
         elif st.screen == "confirm":
             c = st.confirm
+            back = c.get("back", "menu")
             if kind in ("LEFT", "RIGHT", "UP", "DOWN"):
                 c["sel"] = 1 - c["sel"]
             elif kind == "OK" and c["sel"] == 1:
-                st.screen = "menu"
+                st.screen = "wifi" if back == "wifi" else "menu"
                 c["yes"]()
             elif kind in ("OK", "BACK"):
-                st.screen = "menu"
-                build_menu(st)
-        elif st.screen in ("msg", "info"):
+                if back == "wifi":
+                    self.go_back("wifi")
+                else:
+                    st.screen = "menu"
+                    build_menu(st)
+        elif st.screen == "msg":
+            if kind in ("OK", "BACK"):
+                self.go_back((st.msg or {}).get("back", "menu"))
+        elif st.screen == "info":
             if kind in ("OK", "BACK"):
                 self.open_menu()
         elif st.screen == "pair":
@@ -1186,6 +1667,7 @@ class Dock:
                 time.sleep(3)
                 continue
             self.note("menu up on %s, vita %s" % (st.disp[1], "connected" if st.vita else "not connected"))
+            self.screen.input.set_text_mode(st.screen == "text")
             for action in self.screen.input.actions():
                 self.handle(action)
             self.tick()
@@ -1233,6 +1715,19 @@ def cmd_screenshot(outdir):
     st.pairing = Pairing()
     st.pairing.started = time.time() - 42
     shot("pair")
+    st.wifi_nets = [
+        {"ssid": "BT-Hub6-7G2K", "signal": 82, "secure": True, "active": True, "known": True},
+        {"ssid": "SKY4F1A2", "signal": 64, "secure": True, "active": False, "known": False},
+        {"ssid": "Fred's iPhone", "signal": 41, "secure": True, "active": False, "known": True},
+        {"ssid": "TP-Link_Guest", "signal": 22, "secure": False, "active": False, "known": False},
+    ]
+    build_wifi(st)
+    st.screen, st.wsel = "wifi", 1
+    shot("wifi")
+    st.screen, st.text_target, st.text, st.kb_r, st.kb_c = "text", "SKY4F1A2", "hunter2", 2, 3
+    st.text_error = "wi-fi passwords are at least 8 characters."
+    shot("wifi-password")
+    st.text_error = ""
     st.vita = None
     st.screen = "home"
     st.error = "vita found but no picture (try 2). trying again..."
