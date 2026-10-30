@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+AUDIO_PCM=auto
+[ -r /etc/vitadock.conf ] && . /etc/vitadock.conf
+
+pcm=${AUDIO_PCM:-auto}
+if [ "$pcm" = auto ]; then
+  pcm=default
+  for s in /sys/class/drm/card*-HDMI-A-*/status; do
+    [ "$(cat "$s" 2>/dev/null)" = connected ] || continue
+    d=${s%/status}
+    n=${d##*-}
+    if [[ "$n" =~ ^[0-9]+$ ]]; then
+      pcm="hdmi:CARD=vc4hdmi$((n - 1)),DEV=0"
+    fi
+    break
+  done
+fi
+
+echo "[vitadock] Bluetooth audio -> $pcm"
+exec "$(command -v bluealsa-aplay)" -S --pcm="$pcm"
