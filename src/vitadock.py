@@ -29,9 +29,12 @@ UPDATE_PROGRESS = UPDATE_DIR + "/update-progress"
 UPDATE_LOG = os.environ.get("VITADOCK_UPDATE_LOG", "/var/log/vitadock-update.log")
 UPDATED_MARKER = os.environ.get("VITADOCK_UPDATED_MARKER", "/var/lib/vitadock/just-updated")
 UPDATE_UNIT = "vitadock-update.service"
+SOUND_DIR = os.environ.get("VITADOCK_SOUND_DIR", "/var/lib/vitadock/sounds")
+FB_SYS = os.environ.get("VITADOCK_FB_SYS", "/sys/class/graphics/fb0")
+FB_DEV = os.environ.get("VITADOCK_FB_DEV", "/dev/fb0")
 
 DEFAULTS = {
-    "VITA_MODE": "864x488",
+    "VITA_MODE": "960x544",
     "VITA_FPS": "60",
     "VITA_PIXFMT": "auto",
     "OUTPUT_MODE": "1920x1080@60",
@@ -43,24 +46,78 @@ DEFAULTS = {
     "EXTRA_MPV_ARGS": "",
     "PLAYER": "fast",
     "USB_AUDIO": "auto",
+    "SHARPNESS": "pixel",
+    "COLOR_FIX": "on",
+    "DOCK_SOUNDS": "on",
+    "USB_BOOST": "off",
 }
 
 VIDEO_MODES = [
-    ("smooth", "864x488", "60", "864x488 @ 60. smoothest, what I'd use"),
-    ("sharp", "960x544", "30", "960x544 @ 30. native res, half the frames"),
-    ("native60", "960x544", "60", "960x544 @ 60-ish. the plugin can't quite hold 60"),
-    ("hd", "1280x720", "30", "1280x720 @ 30. needs sharpscale + a 720p game patch"),
+    ("native", "960x544", "60", "native, 60fps",
+     "the vita's own resolution, 960x544. sharpest picture, so it's the default. at this size "
+     "the plugin sometimes dips just under 60fps, you'll rarely notice."),
+    ("smooth", "864x488", "60", "smaller, 60fps",
+     "864x488. a bit less to send down the usb cable, but the vita has to shrink its picture "
+     "to make it, so it's softer. only worth trying if native stutters."),
+    ("native30", "960x544", "30", "native, 30fps",
+     "960x544 at a steady 30fps. for 30fps games if 60 gives you trouble."),
+    ("hd", "1280x720", "30", "720p (sharpscale)",
+     "real 720p from games that support it. needs the sharpscale plugin and a 720p patch for "
+     "that game on the vita. 30fps only."),
 ]
-SCALERS = [
-    ("lanczos", "lanczos. sharpest"),
-    ("spline36", "spline36. a touch softer"),
-    ("bilinear", "bilinear. soft, least work for the pi"),
+PLAYERS = [
+    ("superfast", "super fast",
+     "the lowest delay i can get out of the pi. no buffering at all, realtime priority, usb and "
+     "video kept on one cpu core, and 120hz output if your tv can do it (restart once after picking it)."),
+    ("fast", "fast",
+     "low delay. the pi 5's display hardware does the scaling, and old frames get dropped "
+     "instead of queued. good for nearly everyone."),
+    ("compatible", "compatible",
+     "uses mpv. more delay, but it's the fallback if the other two don't work, and it lets "
+     "you pick a smoothing filter."),
+]
+SHARPNESS = [
+    ("pixel", "pixel perfect",
+     "scales by a whole number (2x on a 1080p tv, 4x on 4k) with no smoothing, so every vita "
+     "pixel stays sharp. trims 2 lines off the top and bottom to fit, which you won't see."),
+    ("smooth", "smooth",
+     "fills the screen and smooths the edges. softer, a bit like the original vitadock. "
+     "use this if pixel perfect leaves a big border on your tv."),
 ]
 OUTPUTS = [
-    ("1920x1080@60", "1080p"),
-    ("1280x720@60", "720p. the tv does the rest of the scaling"),
-    ("3840x2160@60", "4k. more gpu work, not much gain"),
-    ("preferred", "whatever the tv asks for"),
+    ("1920x1080@60", "1080p",
+     "the best match for the vita. native mode scales up exactly 2x. (super fast bumps this to "
+     "120hz when the tv supports it.)"),
+    ("3840x2160@60", "4k",
+     "native mode scales exactly 4x. only if your tv is 4k, and some tvs add delay at 4k."),
+    ("1280x720@60", "720p",
+     "the tv does the rest of the scaling. usually softer, only use it if the others don't work."),
+    ("preferred", "tv's choice",
+     "whatever the tv says it prefers."),
+]
+SCALERS = [
+    ("lanczos", "lanczos", "sharpest of the three."),
+    ("spline36", "spline36", "a touch softer, fewer halos round edges."),
+    ("bilinear", "bilinear", "softest, least work for the pi."),
+]
+ON_OFF = [("on", "on", ""), ("off", "off", "")]
+USB_AUDIO_OPTS = [
+    ("auto", "on",
+     "plays the vita's sound out of the tv when the plugin sends it over usb (vitastream, "
+     "VitaUSBStream). does nothing with udcd_uvc."),
+    ("off", "off", "ignore usb sound, for when you're using a cable or bluetooth instead."),
+]
+SOUND_OPTS = [
+    ("on", "on", "the little chime when the dock starts and the blip when the vita connects."),
+    ("off", "off", "no dock sounds."),
+]
+BOOST_OPTS = [
+    ("off", "normal",
+     "the pi 5 gives its usb ports 600mA between them, unless it sees the official 5A power "
+     "supply. enough to keep the vita going, but it charges slowly or not at all while you play."),
+    ("on", "boosted",
+     "lets the usb ports give up to 1.6A. only turn this on with the official raspberry pi 27W "
+     "(5A) supply, or the pi can brown out. needs a restart."),
 ]
 
 
@@ -121,7 +178,7 @@ def set_config(key, value):
 
 
 def mode_name(cfg):
-    for name, size, fps, _ in VIDEO_MODES:
+    for name, size, fps, _, _ in VIDEO_MODES:
         if cfg["VITA_MODE"] == size and cfg["VITA_FPS"] == fps:
             return name
     return "custom"
@@ -241,6 +298,7 @@ def pick_pixfmt(cfg, dev):
 
 
 _GST_OK = None
+_KMS_PROPS = None
 
 
 def gst_available():
@@ -251,19 +309,119 @@ def gst_available():
     return _GST_OK
 
 
+def kmssink_props():
+    global _KMS_PROPS
+    if _KMS_PROPS is None:
+        out = sh(["gst-inspect-1.0", "kmssink"], timeout=10).stdout
+        _KMS_PROPS = {p for p in ("skip-vsync", "render-rectangle", "plane-properties") if p in out}
+        crop = sh(["gst-inspect-1.0", "videocrop"], timeout=10).returncode == 0
+        if crop:
+            _KMS_PROPS.add("videocrop")
+    return _KMS_PROPS
+
+
+def player_name(cfg):
+    p = cfg.get("PLAYER", "fast")
+    return p if p in ("superfast", "fast", "compatible") else "fast"
+
+
 GST_FORMATS = {"nv12": "NV12", "yuyv422": "YUY2"}
 
 
-def gst_command(cfg, vita, pixfmt):
+def output_size(cfg, disp):
+    sysdir = disp[2] if disp else ""
+    modes = []
+    try:
+        with open(sysdir + "/modes") as f:
+            modes = f.read().split()
+    except OSError:
+        pass
+    m = re.match(r"^(\d+)x(\d+)", cfg.get("OUTPUT_MODE", ""))
+    if m and (not modes or "%sx%s" % m.groups() in modes):
+        return int(m.group(1)), int(m.group(2))
+    if modes:
+        w, h = modes[0].split("x")
+        return int(w), int(h)
+    return 1920, 1080
+
+
+def scaling_plan(src_w, src_h, out_w, out_h, sharp):
+    if sharp:
+        for k in range(8, 0, -1):
+            dw = src_w * k
+            if dw > out_w:
+                continue
+            crop = 0
+            over = src_h * k - out_h
+            if over > 0:
+                rows = -(-over // k)
+                crop = -(-rows // 2)
+                crop += crop % 2
+                if crop * 2 > src_h * 0.03:
+                    continue
+            h = (src_h - 2 * crop) * k
+            if dw < out_w * 0.85:
+                break
+            return {"nearest": True, "crop": crop, "k": k,
+                    "rect": ((out_w - dw) // 2, (out_h - h) // 2, dw, h)}
+    return {"nearest": False, "crop": 0, "k": 0, "rect": None}
+
+
+def gst_command(cfg, vita, pixfmt, plan=None, superfast=False):
+    props = kmssink_props()
     w, h = cfg["VITA_MODE"].split("x")
     caps = "video/x-raw,width=%s,height=%s,framerate=%s/1" % (w, h, cfg["VITA_FPS"])
     if GST_FORMATS.get(pixfmt):
         caps += ",format=" + GST_FORMATS[pixfmt]
-    return ["gst-launch-1.0", "-q",
-            "v4l2src", "device=" + vita, "io-mode=mmap", "do-timestamp=false", "!",
-            caps, "!",
-            "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream", "!",
-            "kmssink", "sync=false", "can-scale=true"]
+    cmd = ["gst-launch-1.0", "-q",
+           "v4l2src", "device=" + vita, "io-mode=mmap", "do-timestamp=false", "!", caps]
+    plan = plan or {"nearest": False, "crop": 0, "rect": None}
+    if plan["crop"] and "videocrop" in props:
+        cmd += ["!", "videocrop", "top=%d" % plan["crop"], "bottom=%d" % plan["crop"]]
+    if not superfast:
+        cmd += ["!", "queue", "max-size-buffers=1", "max-size-bytes=0", "max-size-time=0", "leaky=downstream"]
+    sink = ["kmssink", "sync=false", "can-scale=true"]
+    if "skip-vsync" in props:
+        sink.append("skip-vsync=true")
+    if plan["rect"] and "render-rectangle" in props and (plan["crop"] == 0 or "videocrop" in props):
+        sink.append("render-rectangle=<%d,%d,%d,%d>" % plan["rect"])
+    plane = []
+    if plan["nearest"]:
+        plane.append("SCALING_FILTER=1")
+    if cfg.get("COLOR_FIX", "on") != "off":
+        plane += ["COLOR_ENCODING=0", "COLOR_RANGE=1"]
+    if plane and "plane-properties" in props:
+        sink.append("plane-properties=s," + ",".join(plane))
+    cmd += ["!"] + sink
+    if superfast:
+        pre = []
+        if shutil.which("chrt"):
+            pre += ["chrt", "-f", "50"]
+        if shutil.which("taskset"):
+            pre += ["taskset", "-c", str(SUPERFAST_CPU)]
+        cmd = pre + cmd
+    return cmd
+
+
+SUPERFAST_CPU = 3
+
+
+def superfast_prepare():
+    try:
+        with open("/proc/interrupts") as f:
+            lines = f.readlines()
+    except OSError:
+        return
+    for line in lines:
+        if "xhci" not in line and "dwc" not in line:
+            continue
+        irq = line.split(":", 1)[0].strip()
+        if irq.isdigit():
+            try:
+                with open("/proc/irq/%s/smp_affinity_list" % irq, "w") as f:
+                    f.write(str(SUPERFAST_CPU))
+            except OSError:
+                pass
 
 
 def mpv_command(cfg, disp, out_mode, vita, pixfmt):
@@ -274,7 +432,7 @@ def mpv_command(cfg, disp, out_mode, vita, pixfmt):
         "--drm-device=" + dev, "--drm-connector=" + conn, "--drm-mode=" + out_mode,
         "--profile=low-latency", "--untimed", "--cache=no", "--no-audio", "--hwdec=no",
         "--demuxer-thread=no", "--swapchain-depth=1",
-        "--scale=" + cfg["SCALER"], "--keepaspect=yes",
+        "--scale=" + (cfg["SCALER"] if cfg["SCALER"] in [s[0] for s in SCALERS] else "lanczos"), "--keepaspect=yes",
         "--osc=no", "--osd-level=0", "--no-input-default-bindings", "--input-terminal=no",
         "--msg-level=all=warn",
         "--demuxer-lavf-o-add=video_size=" + cfg["VITA_MODE"],
@@ -305,6 +463,10 @@ def apply_output_mode(cfg):
     om = cfg["OUTPUT_MODE"]
     if re.match(r"^\d+x\d+(@\d+)?$", om):
         mode = om if "@" in om else om + "@60"
+        if player_name(cfg) == "superfast" and mode.startswith("1920x1080@"):
+            hz = best_1080p_refresh(find_display(cfg))
+            if hz > 60:
+                mode = "1920x1080@%d" % hz
         keep += ["video=HDMI-A-1:" + mode, "video=HDMI-A-2:" + mode]
     keep.append("usbcore.autosuspend=-1")
     if keep == tokens:
@@ -313,6 +475,76 @@ def apply_output_mode(cfg):
         f.write(" ".join(keep) + "\n")
     os.replace(path + ".tmp", path)
     return True
+
+
+def edid_vics(disp):
+    try:
+        with open(disp[2] + "/edid", "rb") as f:
+            edid = f.read()
+    except (OSError, TypeError, IndexError):
+        return set()
+    vics = set()
+    for b in range(128, len(edid) - 127, 128):
+        block = edid[b:b + 128]
+        if block[0] != 0x02:
+            continue
+        end = block[2] if 4 <= block[2] <= 127 else 4
+        i = 4
+        while i < end:
+            tag, length = block[i] >> 5, block[i] & 0x1F
+            if tag == 2:
+                for v in block[i + 1:i + 1 + length]:
+                    vics.add(v & 0x7F if 1 <= (v & 0x7F) <= 64 else v)
+            i += 1 + length
+    return vics
+
+
+def best_1080p_refresh(disp):
+    vics = edid_vics(disp) if disp else set()
+    return 120 if 63 in vics else 100 if 64 in vics else 60
+
+
+def boot_config_path():
+    path = boot_cmdline_path()
+    cfg_path = os.path.join(os.path.dirname(path), "config.txt") if path else None
+    return cfg_path if cfg_path and os.path.exists(cfg_path) else None
+
+
+BOOST_MARK = "# VitaDock++ usb power boost"
+
+
+def set_usb_boost(on):
+    path = boot_config_path()
+    if not path:
+        raise RuntimeError("couldn't find config.txt")
+    with open(path) as f:
+        lines = f.read().splitlines()
+    out, skip = [], False
+    for line in lines:
+        if line.strip() == BOOST_MARK:
+            skip = True
+            continue
+        if skip and line.strip() in ("[all]", "usb_max_current_enable=1"):
+            continue
+        skip = False
+        out.append(line)
+    if on:
+        out += [BOOST_MARK, "[all]", "usb_max_current_enable=1"]
+    if out == lines:
+        return False
+    with open(path + ".tmp", "w") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(path + ".tmp", path)
+    return True
+
+
+def psu_max_current():
+    try:
+        with open("/proc/device-tree/chosen/power/max_current", "rb") as f:
+            raw = f.read()
+        return int.from_bytes(raw[:4], "big") if len(raw) >= 4 else 0
+    except OSError:
+        return 0
 
 
 def cpu_performance():
@@ -567,6 +799,145 @@ def kb_cols(row):
     return len(KB_SPECIAL) if row == 4 else 10
 
 
+def _write_tone(path, notes, rate=48000):
+    import math
+    import struct
+    import wave
+    data = bytearray()
+    for freq, dur, vol in notes:
+        n = int(rate * dur)
+        for i in range(n):
+            t = i / rate
+            env = min(1.0, i / (rate * 0.004)) * math.exp(-4.0 * t / dur)
+            if freq:
+                ph = (t * freq) % 1.0
+                sq = 1.0 if ph < 0.5 else -1.0
+                tri = 4 * abs(ph - 0.5) - 1
+                v = (0.45 * sq + 0.55 * tri) * env * vol
+            else:
+                v = 0.0
+            iv = int(max(-1.0, min(1.0, v)) * 32767 * 0.5)
+            data += struct.pack("<hh", iv, iv)
+    with wave.open(path, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(bytes(data))
+
+
+SOUNDS = {
+    "boot": [(659.3, 0.09, 0.8), (830.6, 0.09, 0.8), (987.8, 0.09, 0.8), (1318.5, 0.42, 0.9)],
+    "connect": [(987.8, 0.06, 0.8), (1318.5, 0.16, 0.9)],
+}
+
+
+def sound_path(name):
+    path = os.path.join(SOUND_DIR, name + ".wav")
+    if not os.path.exists(path):
+        try:
+            os.makedirs(SOUND_DIR, exist_ok=True)
+            _write_tone(path + ".tmp", SOUNDS[name])
+            os.replace(path + ".tmp", path)
+        except (OSError, KeyError) as e:
+            log("couldn't make the %s sound: %s" % (name, e))
+            return None
+    return path
+
+
+def play_sound(name, cfg, disp, wait=False):
+    if cfg.get("DOCK_SOUNDS", "on") == "off" or not shutil.which("aplay"):
+        return
+    path = sound_path(name)
+    if not path:
+        return
+    try:
+        proc = subprocess.Popen(["aplay", "-q", "-D", hdmi_pcm(cfg, disp), path],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if wait:
+            proc.wait(3)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+class FbSplash:
+
+    def __init__(self):
+        self.thread = None
+        self.stop_ev = threading.Event()
+        self.cache = {}
+
+    def _fb_info(self):
+        def rd(name):
+            with open(os.path.join(FB_SYS, name)) as f:
+                return f.read().strip()
+        w, h = (int(x) for x in rd("virtual_size").split(","))
+        bpp = int(rd("bits_per_pixel"))
+        try:
+            stride = int(rd("stride"))
+        except (OSError, ValueError):
+            stride = w * bpp // 8
+        return w, h, bpp, stride
+
+    def _to_fb(self, img, w, bpp, stride):
+        raw = img.tobytes("raw", "BGRX") if bpp == 32 else img.tobytes("raw", "BGR;16")
+        row = w * bpp // 8
+        if stride == row:
+            return raw
+        pad = b"\0" * (stride - row)
+        return b"".join(raw[i:i + row] + pad for i in range(0, len(raw), row))
+
+    def frames(self, st, w, h, bpp, stride, n=4):
+        key = (w, h, bpp, stride, st.ver)
+        if key not in self.cache:
+            out = []
+            for i in range(n):
+                g = PilGfx(w, h)
+                draw_connecting(g, st, i)
+                out.append(self._to_fb(g.img, w, bpp, stride))
+            g = PilGfx(w, h)
+            g.fill((0, 0, 0))
+            out.append(self._to_fb(g.img, w, bpp, stride))
+            self.cache[key] = out
+        return self.cache[key]
+
+    def start(self, st, seconds=4.0):
+        self.stop()
+        try:
+            from PIL import Image
+            w, h, bpp, stride = self._fb_info()
+            if bpp not in (16, 32):
+                return
+            fb = os.open(FB_DEV, os.O_WRONLY)
+        except (ImportError, OSError, ValueError) as e:
+            log("no framebuffer splash: %s" % e)
+            return
+        self.stop_ev.clear()
+
+        def loop():
+            try:
+                frames = self.frames(st, w, h, bpp, stride)
+                end = time.time() + seconds
+                i = 0
+                while not self.stop_ev.is_set() and time.time() < end:
+                    os.pwrite(fb, frames[i % (len(frames) - 1)], 0)
+                    i += 1
+                    self.stop_ev.wait(0.18)
+                os.pwrite(fb, frames[-1], 0)
+            except OSError as e:
+                log("framebuffer splash stopped: %s" % e)
+            finally:
+                os.close(fb)
+
+        self.thread = threading.Thread(target=loop, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        if self.thread:
+            self.stop_ev.set()
+            self.thread.join(2)
+            self.thread = None
+
+
 BG = (22, 23, 27)
 FG = (226, 223, 214)
 DIM = (120, 122, 128)
@@ -667,6 +1038,50 @@ HANDHELD = [
 ]
 
 
+def draw_handheld_partial(g, x, y, px, color, frac):
+    rows = len(HANDHELD)
+    upto = frac * rows
+    for r, row in enumerate(HANDHELD):
+        if r >= upto:
+            break
+        for c, ch in enumerate(row):
+            if ch == "#":
+                g.rect(x + c * px, y + r * px, px, px, color)
+
+
+def draw_intro(g, st, t):
+    u = g.u
+    g.fill(BG)
+    px = max(3, int(12 * u))
+    iw = len(HANDHELD[0]) * px
+    ih = len(HANDHELD) * px
+    x = (g.w - iw) / 2
+    y = g.h / 2 - ih - 20 * u
+    draw_handheld_partial(g, x, y, px, ACCENT, min(1.0, t / 0.55))
+    title = "VitaDock++"
+    shown = title[:max(0, int((t - 0.45) / 0.4 * len(title) + 0.999))] if t > 0.45 else ""
+    if shown:
+        g.text(g.w / 2, y + ih + 40 * u, shown, "big", FG, "c")
+    if t > 0.85:
+        g.text(g.w / 2, y + ih + 100 * u, st.ver, "small", DIM, "c")
+
+
+def draw_connecting(g, st, frame):
+    u = g.u
+    g.fill(BG)
+    px = max(3, int(9 * u))
+    iw = len(HANDHELD[0]) * px
+    ih = len(HANDHELD) * px
+    x = (g.w - iw) / 2
+    y = g.h / 2 - ih
+    draw_handheld(g, x, y, px, ACCENT)
+    cx = x + 11.5 * px
+    for i in range(4):
+        on = i == frame % 4
+        g.rect(cx - px / 2, y + ih + (i * 1.6 + 0.6) * px, px * 2, px, ACCENT if on else FAINT)
+    g.text(g.w / 2, y + ih + 9 * px, "getting the picture" + "." * (frame % 4), "body", DIM, "c")
+
+
 def draw_handheld(g, x, y, px, color):
     for r, row in enumerate(HANDHELD):
         for c, ch in enumerate(row):
@@ -709,61 +1124,141 @@ class State:
         self.kb_layer = "abc"
         self.kb_r = 1
         self.kb_c = 0
+        self.menu = "main"
+        self.menu_stack = []
+        self.menu_note = ""
+        self.choice = None
+        self.scroll = 0
+
+
+MENU_TITLES = {"main": "settings", "picture": "picture", "sound": "sound",
+               "power": "power and charging", "system": "system"}
+
+
+def option_label(options, value, fallback="custom"):
+    for v, label, _ in options:
+        if v == value:
+            return label
+    return fallback
+
+
+def choice_def(st, key):
+    cfg = st.cfg
+    if key == "mode":
+        return ("video from the vita", [(n, l, d) for n, _, _, l, d in VIDEO_MODES], mode_name(cfg))
+    if key == "sharp":
+        return ("sharpness", SHARPNESS, cfg.get("SHARPNESS", "pixel"))
+    if key == "player":
+        return ("speed", PLAYERS, player_name(cfg))
+    if key == "output":
+        return ("tv resolution", OUTPUTS, cfg["OUTPUT_MODE"])
+    if key == "scaler":
+        return ("smoothing filter", SCALERS, cfg["SCALER"])
+    if key == "usbaudio":
+        return ("sound over usb", USB_AUDIO_OPTS, "off" if cfg.get("USB_AUDIO") == "off" else "auto")
+    if key == "sounds":
+        return ("dock sounds", SOUND_OPTS, cfg.get("DOCK_SOUNDS", "on"))
+    if key == "boost":
+        return ("usb power for the vita", BOOST_OPTS, cfg.get("USB_BOOST", "off"))
+    raise KeyError(key)
+
+
+def choice_value_label(st, key):
+    title, options, cur = choice_def(st, key)
+    if key == "mode":
+        return option_label(options, cur, "%s @ %s" % (st.cfg["VITA_MODE"], st.cfg["VITA_FPS"]))
+    return option_label(options, cur, cur)
 
 
 def build_menu(st):
     cfg = st.cfg
-    items = [("back", "back to game" if st.vita else "close menu", "")]
-    items.append(("mode", "video mode", mode_name(cfg)))
-    fast = cfg["PLAYER"] == "fast" and gst_available()
-    items.append(("player", "player", "fast" if cfg["PLAYER"] == "fast" else "compatible"))
-    if not fast:
-        items.append(("scaler", "upscaling", cfg["SCALER"]))
-    items.append(("output", "tv resolution", cfg["OUTPUT_MODE"]))
-    items.append(("wifi", "wi-fi", st.wifi_label or "..."))
-    items.append(("usbaudio", "usb audio", "on" if usb_audio_wanted(cfg) else "off"))
-    items.append(("audio", "bluetooth audio", "on" if cfg["BT_AUDIO"] == "yes" else "off"))
-    if cfg["BT_AUDIO"] == "yes":
-        items.append(("pair", "pair the vita for audio", ""))
-    items += [("info", "info + help", ""),
-              ("update", "check for updates", ""),
-              ("reboot", "restart the pi", ""),
-              ("shutdown", "shut down the pi", ""),
-              ("uninstall", "uninstall vitadock++", "")]
+    m = st.menu
+    c = lambda key, label: ("choice:" + key, label, choice_value_label(st, key))
+    if m == "picture":
+        items = [c("mode", "video from the vita")]
+        if player_name(cfg) == "compatible":
+            items.append(c("scaler", "smoothing filter"))
+        else:
+            items.append(c("sharp", "sharpness"))
+        items += [c("player", "speed"), c("output", "tv resolution")]
+    elif m == "sound":
+        items = [c("usbaudio", "sound over usb"),
+                 ("bt", "bluetooth audio", "on" if cfg["BT_AUDIO"] == "yes" else "off")]
+        if cfg["BT_AUDIO"] == "yes":
+            items.append(("pair", "pair the vita over bluetooth", ""))
+        items.append(c("sounds", "dock sounds"))
+    elif m == "power":
+        items = [c("boost", "usb power for the vita"),
+                 ("chargehelp", "charging while you play", ""),
+                 ("reboot", "restart the pi", ""),
+                 ("shutdown", "shut down the pi", "")]
+    elif m == "system":
+        items = [("info", "what's plugged in", ""),
+                 ("update", "check for updates", ""),
+                 ("restartdock", "restart the dock", ""),
+                 ("uninstall", "uninstall vitadock++", "")]
+    else:
+        st.menu = "main"
+        pic = "%s, %s" % (option_label(SHARPNESS, cfg.get("SHARPNESS", "pixel"), "")
+                          if player_name(cfg) != "compatible" else "mpv",
+                          option_label(PLAYERS, player_name(cfg), ""))
+        items = [("back", "back to game" if st.vita else "close menu", ""),
+                 ("sub:picture", "picture", pic),
+                 ("sub:sound", "sound", audio_desc(st)),
+                 ("wifi", "wi-fi", st.wifi_label or "..."),
+                 ("sub:power", "power and charging", ""),
+                 ("sub:system", "system", st.ver),
+                 ("help", "help", "")]
     st.items = items
-    st.sel = min(st.sel, len(items) - 1)
+    st.sel = max(0, min(st.sel, len(items) - 1))
 
 
 def item_help(st, key):
     cfg = st.cfg
-    if key == "mode":
-        for name, _, _, text in VIDEO_MODES:
-            if name == mode_name(cfg):
-                return text
-        return "custom mode from vitadock.conf"
-    if key == "scaler":
-        return dict(SCALERS).get(cfg["SCALER"], "")
-    if key == "output":
-        return dict(OUTPUTS).get(cfg["OUTPUT_MODE"], "custom, from vitadock.conf") + ". applies after a restart"
+    if key.startswith("choice:"):
+        title, options, cur = choice_def(st, key[7:])
+        for v, _, desc in options:
+            if v == cur:
+                extra = ""
+                if key == "choice:output" and player_name(cfg) == "superfast":
+                    hz = best_1080p_refresh(st.disp)
+                    extra = (" your tv can do %dhz, so super fast uses that." % hz) if hz > 60 else \
+                            " your tv doesn't list 1080p above 60hz."
+                return desc + extra
+        return "set by hand in vitadock.conf."
     return {
-        "back": "the game picks up where it was" if st.vita else "back to the waiting screen",
-        "wifi": "join a network, or see which one the pi is on",
-        "usbaudio": ("sound over the usb cable. needs the vitastream or VitaUSBStream plugin"
-                     + (", and your vita isn't sending any" if st.vita and not st.vita_audio and usb_audio_wanted(cfg)
-                        else ". working" if st.vita_audio and usb_audio_wanted(cfg) else "")),
-        "audio": "vita sound over bluetooth, out of the tv. still a bit experimental",
-        "pair": "do this once, then connect from the vita's bluetooth menu",
-        "info": "ip address, what's plugged in, controls",
-        "update": "needs the pi on the internet",
-        "player": ("fast: lowest delay, the pi's display hardware does the scaling"
-                   if cfg["PLAYER"] == "fast" and gst_available() else
-                   "fast isn't installed, using mpv. re-run the installer to get it"
-                   if cfg["PLAYER"] == "fast" else
-                   "compatible: mpv. more delay, but lets you pick the upscaling filter"),
-        "reboot": "",
-        "shutdown": "wait for the green light to stop before pulling the power",
-        "uninstall": "removes vitadock++ and restarts into plain pi os",
+        "back": "back to the game, right where you left it." if st.vita else "back to the waiting screen.",
+        "sub:picture": "how sharp and how quick the picture is: resolution, sharpness, speed and tv mode.",
+        "sub:sound": "where the vita's sound comes from, bluetooth pairing, and the dock's own sounds.",
+        "wifi": "see which network the pi is on, or join another one.",
+        "sub:power": "charging the vita while it's docked, and restarting or shutting down the pi.",
+        "sub:system": "what's connected, updates, and uninstalling.",
+        "help": "the controls, and which vita plugin does what.",
+        "bt": "the vita connects to the dock like a bluetooth speaker and the sound comes out of the tv. "
+              "for udcd_uvc, which only sends the picture. still a bit experimental.",
+        "pair": "do this once. after that, just connect from the vita's bluetooth menu.",
+        "chargehelp": "what you need to do on the vita so it charges while you play.",
+        "reboot": "turns the pi off and on again.",
+        "shutdown": "wait for the green light to stop flashing before you pull the power.",
+        "info": "the tv mode, the vita's video and sound devices, the player in use and the pi's ip address.",
+        "update": "checks github for a new version. the pi needs to be online. your settings are kept.",
+        "restartdock": "restarts just the dock software, handy if something's got stuck.",
+        "uninstall": "removes vitadock++ and its settings, then restarts into plain pi os.",
     }.get(key, "")
+
+
+def wrap_text(g, text, font, width):
+    words, lines, cur = text.split(), [], ""
+    for wd in words:
+        trial = (cur + " " + wd).strip()
+        if g.measure(trial, font) <= width or not cur:
+            cur = trial
+        else:
+            lines.append(cur)
+            cur = wd
+    if cur:
+        lines.append(cur)
+    return lines
 
 
 def draw_chrome(g, st, hints):
@@ -789,6 +1284,16 @@ def dotted(g, x, y, key, value, width, color=FG):
     if n > 1:
         g.text(x + kw, y, "." * n, "body", FAINT)
     g.text(x + width, y, value, "body", color, "r")
+
+
+def picture_desc(st):
+    if player_name(st.cfg) == "compatible" or not gst_available() or not st.disp:
+        return "mpv, " + st.cfg["SCALER"]
+    sw, sh_ = (int(v) for v in st.cfg["VITA_MODE"].split("x"))
+    ow, oh = output_size(st.cfg, st.disp)
+    plan = scaling_plan(sw, sh_, ow, oh, st.cfg.get("SHARPNESS", "pixel") == "pixel")
+    return ("pixel perfect %dx on %dx%d" % (plan["k"], ow, oh)) if plan["nearest"] else \
+        "smooth on %dx%d" % (ow, oh)
 
 
 def audio_desc(st):
@@ -830,31 +1335,102 @@ def draw_home(g, st):
         g.text(tx, y + lh * 5.6, st.notice, "small", GOOD)
 
 
-def draw_menu(g, st):
-    u, W = g.u, g.w
-    draw_chrome(g, st, "up/down move   left/right change   enter select   esc back")
+def draw_list(g, st, rows, sel, title, help_text, note=""):
+    u, W, H = g.u, g.w, g.h
     st.hits = []
     x = 120 * u
     w = W - 240 * u
-    y = 96 * u
-    g.text(x, y, "settings", "small", DIM)
+    y = 92 * u
+    g.text(x, y, title, "small", DIM)
     y += 34 * u
-    row = 40 * u
+    row = 42 * u
     pad = 14 * u
-    for i, (key, label, value) in enumerate(st.items):
-        sel = i == st.sel
-        if sel:
-            g.rect(x - pad, y - 6 * u, w + 2 * pad, row, ACCENT)
-        color = ACCENT_FG if sel else (BAD if key == "uninstall" else FG)
-        g.text(x, y, ("> " if sel else "  ") + label, "body", color)
+    panel_top = H - 62 * u - 112 * u
+    fits = max(3, int((panel_top - 12 * u - y) / row))
+    top = max(0, min(sel - fits // 2, len(rows) - fits))
+    if top > 0:
+        g.text(x + w, y - 34 * u, "more above", "small", DIM, "r")
+    for i in range(top, min(len(rows), top + fits)):
+        label, value, color, marker = rows[i]
+        on = i == sel
+        if on:
+            g.rect(x - pad, y - 6 * u, w + 2 * pad, row - 2 * u, ACCENT)
+        g.text(x, y, (marker or ("> " if on else "  ")) + label, "body", ACCENT_FG if on else color)
         if value:
-            v = "< %s >" % value if sel else value
-            g.text(x + w, y, v, "body", ACCENT_FG if sel else DIM, "r")
-        st.hits.append((x - pad, y - 6 * u, w + 2 * pad, row, i))
+            g.text(x + w, y, value, "body", ACCENT_FG if on else DIM, "r")
+        st.hits.append((x - pad, y - 6 * u, w + 2 * pad, row - 2 * u, i))
         y += row
-    tip = item_help(st, st.items[st.sel][0]) if st.items else ""
-    if tip:
-        g.text(x, y + 18 * u, tip, "small", DIM)
+    if top + fits < len(rows):
+        g.text(x, y, "  more below", "small", DIM)
+    g.rect(x - pad, panel_top, w + 2 * pad, max(1, int(2 * u)), FAINT)
+    ty = panel_top + 16 * u
+    lh = g.line_h("small") * 1.25
+    for line in wrap_text(g, help_text, "small", w)[:3]:
+        g.text(x, ty, line, "small", FG)
+        ty += lh
+    if note:
+        g.text(x, ty + 4 * u, note, "small", ACCENT)
+
+
+def draw_menu(g, st):
+    is_main = st.menu == "main"
+    draw_chrome(g, st, "up/down move   enter open   left/right change   esc " + ("close" if is_main else "back"))
+    rows = []
+    for key, label, value in st.items:
+        color = BAD if key == "uninstall" else FG
+        if key.startswith("choice:") and st.items[st.sel][0] == key:
+            value = "< %s >" % value
+        elif key.startswith("sub:") or key in ("wifi", "help"):
+            value = (value + "  >") if value else ">"
+        rows.append((label, value, color, ""))
+    title = "settings" if is_main else "settings / " + MENU_TITLES.get(st.menu, st.menu)
+    key = st.items[st.sel][0] if st.items else ""
+    draw_list(g, st, rows, st.sel, title, item_help(st, key), st.menu_note)
+
+
+def draw_choose(g, st):
+    draw_chrome(g, st, "up/down move   enter pick   esc back")
+    key = st.choice["key"]
+    title, options, cur = choice_def(st, key)
+    rows = [(label, "current" if v == cur else "", FG, "(*) " if v == cur else "( ) ")
+            for v, label, _ in options]
+    sel = st.choice["sel"]
+    crumb = "settings / %s / %s" % (MENU_TITLES.get(st.menu, st.menu), title)
+    draw_list(g, st, rows, sel, crumb, options[sel][2] if options else "")
+
+
+HELP_TEXT = [
+    ("opening the menu", [
+        "keyboard  enter. mid-game: esc, tab or the windows key",
+        "mouse     click. mid-game: right click",
+        "usb pad   A. mid-game: the PS/home button, or start + select",
+    ]),
+    ("getting around", [
+        "up/down to move, enter or A to pick, esc or B to go back.",
+        "left/right changes a setting without opening it.",
+    ]),
+    ("vita plugins", [
+        "udcd_uvc            picture only. sound by cable or bluetooth",
+        "vitastream          picture and sound over usb",
+        "VitaUSBStream       picture and sound, turn it on in its app first",
+    ]),
+    ("charging", [
+        "on the vita: settings > system > usb power supply, turn it on.",
+    ]),
+]
+
+
+def draw_help(g, st):
+    u = g.u
+    draw_chrome(g, st, "enter / esc . . . back")
+    x, y = 120 * u, 96 * u
+    for head, lines in HELP_TEXT:
+        g.text(x, y, head, "body", ACCENT)
+        y += g.line_h("body") * 1.15
+        for line in lines:
+            g.text(x + 24 * u, y, line, "small", FG)
+            y += g.line_h("small") * 1.3
+        y += 14 * u
 
 
 def draw_confirm(g, st):
@@ -925,7 +1501,9 @@ def draw_info(g, st):
         ("ip address", ", ".join(st.ips) or "not on a network"),
         ("tv", "%s at %s" % (st.disp[1], st.out_mode) if st.disp else "none"),
         ("vita", "%s (%s)" % (st.vita, st.pixfmt or "default format") if st.vita else "not plugged in"),
-        ("player", ("fast" if st.cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)")),
+        ("player", option_label(PLAYERS, player_name(st.cfg)) if player_name(st.cfg) != "compatible"
+         and gst_available() else "compatible (mpv)"),
+        ("picture", picture_desc(st)),
         ("sound", "usb (%s)" % st.vita_audio if st.vita_audio and usb_audio_wanted(st.cfg) else audio_desc(st)),
         ("settings file", CONF),
     ]
@@ -1122,10 +1700,15 @@ def draw_update(g, st):
         g.text(x, y, "restart the pi if the dock doesn't come back on its own.", "small", DIM)
 
 
+def draw_intro_screen(g, st):
+    draw_intro(g, st, st.intro_t if hasattr(st, "intro_t") else 1.0)
+
+
 def draw(g, st):
     {"home": draw_home, "menu": draw_menu, "confirm": draw_confirm, "msg": draw_message,
      "busy": draw_message, "pair": draw_pair, "info": draw_info,
-     "wifi": draw_wifi, "text": draw_text, "update": draw_update}[st.screen](g, st)
+     "wifi": draw_wifi, "text": draw_text, "update": draw_update,
+     "choose": draw_choose, "help": draw_help, "intro": draw_intro_screen}[st.screen](g, st)
 
 
 class PygameInput:
@@ -1392,6 +1975,11 @@ class Dock:
         self.gst_fails = 0
         self.gst_broken = False
         self.player_used = ""
+        self.fb = FbSplash()
+        self.played_once = False
+        self.last_connect_sound = 0
+        self.intro_done = False
+        self.intro_skip = False
 
     def note(self, msg):
         if msg != self.last_note:
@@ -1425,22 +2013,35 @@ class Dock:
                 audio.kill()
 
     def pick_player(self):
-        if self.st.cfg["PLAYER"] == "fast" and not self.gst_broken and gst_available():
-            return "fast"
+        p = player_name(self.st.cfg)
+        if p in ("fast", "superfast") and not self.gst_broken and gst_available():
+            return p
         return "mpv"
 
     def play(self):
         st = self.st
         player = self.pick_player()
-        if player == "fast":
-            cmd = gst_command(st.cfg, st.vita, st.pixfmt)
+        plan = {"nearest": False, "crop": 0, "rect": None}
+        if player in ("fast", "superfast"):
+            sw, sh_ = (int(v) for v in st.cfg["VITA_MODE"].split("x"))
+            ow, oh = output_size(st.cfg, st.disp)
+            plan = scaling_plan(sw, sh_, ow, oh, st.cfg.get("SHARPNESS", "pixel") == "pixel")
+            if player == "superfast":
+                superfast_prepare()
+            cmd = gst_command(st.cfg, st.vita, st.pixfmt, plan, superfast=player == "superfast")
         else:
             cmd = mpv_command(st.cfg, st.disp, st.out_mode, st.vita, st.pixfmt)
         self.player_used = player
-        log("playing %s with %s: %s @ %sfps (%s) -> %s %s" % (
+        log("playing %s with %s: %s @ %sfps (%s) -> %s %s, %s" % (
             st.vita, player, st.cfg["VITA_MODE"], st.cfg["VITA_FPS"], st.pixfmt or "default",
-            st.disp[1], st.out_mode))
+            st.disp[1], st.out_mode,
+            "pixel perfect %dx" % plan["k"] if plan.get("nearest") else "smooth"))
         self.screen.close()
+        if not self.played_once or time.time() - self.last_connect_sound > 30:
+            play_sound("connect", st.cfg, st.disp, wait=True)
+            self.last_connect_sound = time.time()
+        self.played_once = True
+        self.fb.start(st)
         started = time.time()
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
         audio = self.start_audio()
@@ -1459,6 +2060,7 @@ class Dock:
         stop.set()
         t.join(2)
         self.stop_audio(audio)
+        self.fb.stop()
         ran = time.time() - started
         self.last_note = ""
         if hit.is_set():
@@ -1498,7 +2100,13 @@ class Dock:
         except Exception as e:
             log("wi-fi status failed: %s" % e)
             st.wifi_label = "?"
+        st.menu, st.menu_stack, st.menu_note = "main", [], ""
         st.screen, st.sel = "menu", sel
+        build_menu(st)
+
+    def show_menu(self):
+        st = self.st
+        st.screen = "menu"
         build_menu(st)
 
     def message(self, title, *lines, back="menu"):
@@ -1513,9 +2121,12 @@ class Dock:
         if where == "wifi":
             build_wifi(self.st)
             self.st.screen = "wifi"
-        else:
+        elif where == "menu-wifi":
+            self.open_menu(1)
             keys = [k for k, _, _ in self.st.items]
-            self.open_menu(keys.index("wifi") if where == "menu-wifi" and "wifi" in keys else 0)
+            self.st.sel = keys.index("wifi") if "wifi" in keys else 0
+        else:
+            self.show_menu()
 
 
     def open_wifi(self, rescan=True):
@@ -1653,42 +2264,65 @@ class Dock:
             self.message("that didn't work", str(e)[:70], "", "vitadock's log has more: journalctl -u vitadock")
             return False
 
-    def cycle(self, key, step):
-        cfg = self.st.cfg
+    def set_choice(self, key, value):
+        st = self.st
+        cfg = st.cfg
+        note = ""
         if key == "mode":
-            names = [m[0] for m in VIDEO_MODES]
-            cur = mode_name(cfg)
-            i = (names.index(cur) + step) % len(names) if cur in names else 0
-            _, size, fps, _ = VIDEO_MODES[i]
-            set_config("VITA_MODE", size)
-            set_config("VITA_FPS", fps)
-        elif key in ("scaler", "output"):
-            opts = [o[0] for o in (SCALERS if key == "scaler" else OUTPUTS)]
-            conf_key = "SCALER" if key == "scaler" else "OUTPUT_MODE"
-            cur = cfg[conf_key]
-            i = (opts.index(cur) + step) % len(opts) if cur in opts else 0
-            set_config(conf_key, opts[i])
-            if key == "output":
-                try:
-                    apply_output_mode(load_config())
-                except OSError as e:
-                    log("couldn't update cmdline.txt: %s" % e)
+            for n, size, fps, _, _ in VIDEO_MODES:
+                if n == value:
+                    set_config("VITA_MODE", size)
+                    set_config("VITA_FPS", fps)
+        elif key == "sharp":
+            set_config("SHARPNESS", value)
+        elif key == "scaler":
+            set_config("SCALER", value)
         elif key == "usbaudio":
-            set_config("USB_AUDIO", "off" if usb_audio_wanted(cfg) else "auto")
-        elif key == "player":
-            set_config("PLAYER", "compatible" if cfg["PLAYER"] == "fast" else "fast")
+            set_config("USB_AUDIO", value)
+        elif key == "sounds":
+            set_config("DOCK_SOUNDS", value)
+        elif key in ("player", "output"):
+            set_config("PLAYER" if key == "player" else "OUTPUT_MODE", value)
             self.gst_broken = False
-        self.st.cfg = load_config()
-        build_menu(self.st)
+            try:
+                if apply_output_mode(load_config()):
+                    note = "restart the pi for the new tv mode to kick in."
+            except OSError as e:
+                log("couldn't update cmdline.txt: %s" % e)
+        elif key == "boost":
+            set_config("USB_BOOST", value)
+            try:
+                if set_usb_boost(value == "on"):
+                    note = "restart the pi for this to kick in."
+            except (OSError, RuntimeError) as e:
+                note = "couldn't change config.txt: %s" % e
+        st.cfg = load_config()
+        st.menu_note = note
+        build_menu(st)
+
+    def cycle(self, key, step):
+        title, options, cur = choice_def(self.st, key)
+        vals = [v for v, _, _ in options]
+        i = (vals.index(cur) + step) % len(vals) if cur in vals else 0
+        self.set_choice(key, vals[i])
 
     def activate(self, key):
         st = self.st
+        st.menu_note = ""
         if key == "back":
             st.screen = "home"
             self.retry_at = 0
-        elif key in ("mode", "scaler", "output", "player", "usbaudio"):
-            self.cycle(key, 1)
-        elif key == "audio":
+        elif key.startswith("sub:"):
+            st.menu_stack.append((st.menu, st.sel))
+            st.menu, st.sel = key[4:], 0
+            build_menu(st)
+        elif key.startswith("choice:"):
+            k = key[7:]
+            title, options, cur = choice_def(st, k)
+            vals = [v for v, _, _ in options]
+            st.choice = {"key": k, "sel": vals.index(cur) if cur in vals else 0}
+            st.screen = "choose"
+        elif key == "bt":
             if st.cfg["BT_AUDIO"] == "yes":
                 self.ask(["turn bluetooth audio off?"], self.audio_off)
             else:
@@ -1703,8 +2337,21 @@ class Dock:
         elif key == "info":
             st.ips = ip_addresses()
             st.screen = "info"
+        elif key == "help":
+            st.screen = "help"
         elif key == "wifi":
             self.open_wifi(True)
+        elif key == "chargehelp":
+            psu = psu_max_current()
+            self.message("charging while you play",
+                         "1. on the vita: settings > system > usb power supply, turn it on.",
+                         "2. use the screen-off version of the plugin (lcd_off or oled_off).",
+                         "   the screen is the biggest drain, so more power goes to the battery.",
+                         "3. a plain pc-style usb port only gives the vita about 500mA, so it",
+                         "   charges slowly while you play. turning usb power boost on helps",
+                         "   if you have the official 5A supply%s." % (
+                             " (the pi says you do)" if psu >= 5000 else
+                             " (the pi says yours is %dmA)" % psu if psu else ""))
         elif key == "update":
             self.check_update()
         elif key == "reboot":
@@ -1712,6 +2359,9 @@ class Dock:
         elif key == "shutdown":
             self.ask(["shut down the pi?", "", "unplug it once the green light stops flashing."],
                      lambda: self.power("poweroff"))
+        elif key == "restartdock":
+            self.ask(["restart the dock?", "", "takes a few seconds."],
+                     lambda: sh(["systemctl", "restart", "vitadock.service"]))
         elif key == "uninstall":
             self.ask(["uninstall vitadock++?",
                       "",
@@ -1728,7 +2378,7 @@ class Dock:
     def audio_off(self):
         if self.busy("turning bluetooth audio off", bt_disable):
             self.st.cfg = load_config()
-            self.open_menu()
+            self.show_menu()
 
     def power(self, what):
         self.busy("restarting" if what == "reboot" else "shutting down", lambda: None)
@@ -1845,6 +2495,8 @@ class Dock:
             if i is not None:
                 if st.screen == "menu":
                     st.sel = i
+                elif st.screen == "choose":
+                    st.choice["sel"] = i
                 elif st.screen == "wifi":
                     st.wsel = i
                 elif st.screen == "confirm":
@@ -1857,6 +2509,9 @@ class Dock:
             if st.screen == "menu" and i is not None:
                 st.sel = i
                 kind = "OK"
+            elif st.screen == "choose" and i is not None:
+                st.choice["sel"] = i
+                kind = "OK"
             elif st.screen == "wifi" and i is not None:
                 st.wsel = i
                 kind = "OK"
@@ -1867,7 +2522,7 @@ class Dock:
                 st.kb_r, st.kb_c = i
                 self.kb_press()
                 return
-            elif st.screen in ("home", "msg", "info"):
+            elif st.screen in ("home", "msg", "info", "help"):
                 kind = "OK"
             else:
                 return
@@ -1879,22 +2534,43 @@ class Dock:
         if kind == "SUBMIT":
             kind = "OK"
 
-        if st.screen == "home":
+        if st.screen == "intro":
+            self.intro_skip = True
+        elif st.screen == "home":
             self.open_menu()
         elif st.screen == "menu":
             n = len(st.items)
             key = st.items[st.sel][0]
             if kind == "UP":
                 st.sel = (st.sel - 1) % n
+                st.menu_note = ""
             elif kind == "DOWN":
                 st.sel = (st.sel + 1) % n
-            elif kind in ("LEFT", "RIGHT") and key in ("mode", "scaler", "output", "player", "usbaudio"):
-                self.cycle(key, -1 if kind == "LEFT" else 1)
+                st.menu_note = ""
+            elif kind in ("LEFT", "RIGHT") and key.startswith("choice:"):
+                self.cycle(key[7:], -1 if kind == "LEFT" else 1)
             elif kind == "OK":
                 self.activate(key)
             elif kind == "BACK":
-                st.screen = "home"
-                self.retry_at = 0
+                st.menu_note = ""
+                if st.menu_stack:
+                    st.menu, st.sel = st.menu_stack.pop()
+                    build_menu(st)
+                else:
+                    st.screen = "home"
+                    self.retry_at = 0
+        elif st.screen == "choose":
+            c = st.choice
+            title, options, cur = choice_def(st, c["key"])
+            if kind == "UP":
+                c["sel"] = (c["sel"] - 1) % len(options)
+            elif kind == "DOWN":
+                c["sel"] = (c["sel"] + 1) % len(options)
+            elif kind == "OK":
+                self.set_choice(c["key"], options[c["sel"]][0])
+                st.screen = "menu"
+            elif kind == "BACK":
+                self.show_menu()
         elif st.screen == "wifi":
             n = len(st.wifi_items)
             if kind == "UP":
@@ -1914,17 +2590,13 @@ class Dock:
                 st.screen = "wifi" if back == "wifi" else "menu"
                 c["yes"]()
             elif kind in ("OK", "BACK"):
-                if back == "wifi":
-                    self.go_back("wifi")
-                else:
-                    st.screen = "menu"
-                    build_menu(st)
+                self.go_back(back)
         elif st.screen == "msg":
             if kind in ("OK", "BACK"):
                 self.go_back((st.msg or {}).get("back", "menu"))
-        elif st.screen == "info":
+        elif st.screen in ("info", "help"):
             if kind in ("OK", "BACK"):
-                self.open_menu()
+                self.show_menu()
         elif st.screen == "update":
             if st.upd and st.upd["state"] != "running" and kind in ("OK", "BACK"):
                 self.open_menu()
@@ -1933,7 +2605,7 @@ class Dock:
                 if st.pairing:
                     st.pairing.stop()
                 st.pairing = None
-                self.open_menu()
+                self.show_menu()
 
     def hit(self, pos):
         x, y = pos
@@ -1952,6 +2624,26 @@ class Dock:
             self.dirty = False
             self.last_draw = time.time()
 
+    def intro(self):
+        st = self.st
+        self.intro_done = True
+        prev = st.screen
+        st.screen, self.intro_skip = "intro", False
+        play_sound("boot", st.cfg, st.disp)
+        start = time.time()
+        length = 2.2
+        while not self.intro_skip:
+            st.intro_t = min(1.0, (time.time() - start) / length)
+            draw(self.screen.gfx, st)
+            self.screen.present()
+            for action in self.screen.input.actions():
+                self.handle(action)
+            if st.intro_t >= 1.0 and time.time() - start > length + 0.6:
+                break
+            time.sleep(1 / 30.0)
+        st.screen = prev if prev != "intro" else "home"
+        self.dirty = True
+
     def tick(self):
         st = self.st
         if st.screen == "update":
@@ -1969,6 +2661,8 @@ class Dock:
     def run(self):
         st = self.st
         signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))
+        if shutil.which("plymouth"):
+            sh(["plymouth", "quit", "--retain-splash"], timeout=5)
         cpu_performance()
         try:
             with open(UPDATED_MARKER) as f:
@@ -2015,6 +2709,8 @@ class Dock:
             if not self.screen.open(st.disp):
                 time.sleep(3)
                 continue
+            if not self.intro_done:
+                self.intro()
             self.note("menu up on %s, vita %s" % (st.disp[1], "connected" if st.vita else "not connected"))
             self.screen.input.set_text_mode(st.screen == "text")
             for action in self.screen.input.actions():
@@ -2033,10 +2729,78 @@ def cmd_status():
     print("vita   %s" % ("%s (%s)" % (vita, pick_pixfmt(cfg, vita) or "default") if vita else "not plugged in"))
     print("mode   %s (%s @ %s)" % (mode_name(cfg), cfg["VITA_MODE"], cfg["VITA_FPS"]))
     print("bt     %s" % ("on" if cfg["BT_AUDIO"] == "yes" else "off"))
-    print("player %s" % ("fast (gstreamer)" if cfg["PLAYER"] == "fast" and gst_available() else "compatible (mpv)"))
+    print("player %s" % (player_name(cfg) if player_name(cfg) != "compatible" and gst_available() else "compatible (mpv)"))
+    if disp:
+        sw, sh_ = (int(v) for v in cfg["VITA_MODE"].split("x"))
+        ow, oh = output_size(cfg, disp)
+        plan = scaling_plan(sw, sh_, ow, oh, cfg.get("SHARPNESS", "pixel") == "pixel")
+        print("scale  %s" % (("pixel perfect %dx, %d rows trimmed each side, at %s" % (plan["k"], plan["crop"], plan["rect"]))
+                             if plan["nearest"] else "smooth, fit to %dx%d" % (ow, oh)))
+        print("1080p  up to %dhz" % best_1080p_refresh(disp))
     va = vita_audio_card(vita)
     print("sound  %s" % ("usb from the vita, %s -> %s" % (va, hdmi_pcm(cfg, disp)) if va and usb_audio_wanted(cfg)
                          else "bluetooth" if cfg["BT_AUDIO"] == "yes" else "no usb audio from the vita"))
+
+
+PLYMOUTH_SCRIPT = """\
+Window.SetBackgroundTopColor(0.086, 0.090, 0.106);
+Window.SetBackgroundBottomColor(0.086, 0.090, 0.106);
+
+logo.image = Image("logo.png");
+logo.sprite = Sprite(logo.image);
+logo.x = Window.GetWidth() / 2 - logo.image.GetWidth() / 2;
+logo.y = Window.GetHeight() / 2 - logo.image.GetHeight() / 2;
+logo.sprite.SetPosition(logo.x, logo.y, 1);
+
+on_img = Image("dot-on.png");
+off_img = Image("dot-off.png");
+for (i = 0; i < 4; i++) {
+    dot[i] = Sprite(off_img);
+    dot[i].SetPosition(Window.GetWidth() / 2 - off_img.GetWidth() / 2,
+                       logo.y + %(cable_y)d + i * %(step)d, 2);
+}
+
+frame = 0;
+fun refresh_callback() {
+    frame++;
+    lit = Math.Int(frame / 7) %% 4;
+    for (i = 0; i < 4; i++) {
+        if (i == lit) dot[i].SetImage(on_img);
+        else dot[i].SetImage(off_img);
+    }
+}
+Plymouth.SetRefreshFunction(refresh_callback);
+"""
+
+
+def cmd_plymouth_theme(outdir):
+    from PIL import Image, ImageDraw, ImageFont
+    os.makedirs(outdir, exist_ok=True)
+    px = 12
+    rows = HANDHELD[:11]
+    w = len(rows[0]) * px
+    font = ImageFont.truetype(os.path.join(FONT_DIR, FONT_FILES["bold"]), 46)
+    title_h = 70
+    img = Image.new("RGB", (max(w, 360), len(rows) * px + 4 * 22 + 40 + title_h), BG)
+    d = ImageDraw.Draw(img)
+    ox = (img.width - w) // 2
+    for r, row in enumerate(rows):
+        for c, ch in enumerate(row):
+            if ch == "#":
+                d.rectangle([ox + c * px, r * px, ox + (c + 1) * px - 1, (r + 1) * px - 1], fill=ACCENT)
+    cable_y = len(rows) * px + 6
+    ty = cable_y + 4 * 22 + 24
+    tw = d.textlength("VitaDock++", font=font)
+    d.text(((img.width - tw) / 2, ty), "VitaDock++", font=font, fill=FG)
+    img.save(os.path.join(outdir, "logo.png"))
+    for name, col in (("dot-on.png", ACCENT), ("dot-off.png", FAINT)):
+        Image.new("RGB", (px * 2, px), col).save(os.path.join(outdir, name))
+    with open(os.path.join(outdir, "vitadock.script"), "w") as f:
+        f.write(PLYMOUTH_SCRIPT % {"cable_y": cable_y, "step": 22})
+    with open(os.path.join(outdir, "vitadock.plymouth"), "w") as f:
+        f.write("[Plymouth Theme]\nName=VitaDock++\nDescription=VitaDock++ boot screen\n"
+                "ModuleName=script\n\n[script]\nImageDir=%s\nScriptFile=%s/vitadock.script\n" % (outdir, outdir))
+    print("plymouth theme written to " + outdir)
 
 
 def cmd_screenshot(outdir):
@@ -2046,6 +2810,7 @@ def cmd_screenshot(outdir):
     st.disp = ("/dev/dri/card1", "HDMI-A-1", "")
     st.out_mode = "1920x1080@60"
     st.ips = ["192.168.1.42"]
+    st.wifi_label = "BT-Hub6-7G2K"
 
     def shot(name, w=1920, h=1080):
         g = PilGfx(w, h)
@@ -2053,39 +2818,52 @@ def cmd_screenshot(outdir):
         g.img.save(os.path.join(outdir, name + ".png"))
         print("wrote " + name)
 
+    for i, t in enumerate((0.3, 0.7, 1.0)):
+        st.screen, st.intro_t = "intro", t
+        shot("intro-%d" % i)
+    g = PilGfx(1920, 1080)
+    draw_connecting(g, st, 2)
+    g.img.save(os.path.join(outdir, "connecting.png"))
+    st.screen = "home"
+    st.notice, st.notice_until = "updated to %s." % st.ver, time.time() + 60
     shot("home")
-    st.vita, st.pixfmt = "/dev/video0", "nv12"
+    st.notice = ""
+    st.vita, st.pixfmt, st.vita_audio = "/dev/video0", "nv12", "hw:CARD=vitastream,DEV=0"
+    st.screen, st.menu, st.sel = "menu", "main", 1
     build_menu(st)
-    st.screen, st.sel = "menu", 1
     shot("menu")
+    for m in ("picture", "sound", "power", "system"):
+        st.menu, st.sel = m, 0
+        build_menu(st)
+        shot("menu-" + m)
+    st.menu, st.sel = "picture", 2
+    build_menu(st)
+    shot("menu-picture-speed")
+    st.screen, st.choice = "choose", {"key": "player", "sel": 0}
+    shot("choose-speed")
+    st.choice = {"key": "sharp", "sel": 0}
+    shot("choose-sharpness")
+    st.screen = "help"
+    shot("help")
     st.screen = "info"
     shot("info")
     st.screen = "confirm"
     st.confirm = {"lines": ["uninstall vitadock++?", "", "this removes it and its settings, then restarts the pi",
                             "into plain pi os. you'd need to reinstall to get it back."], "yes": None, "sel": 0}
     shot("confirm")
-    st.screen = "pair"
-    st.pairing = Pairing()
-    st.pairing.started = time.time() - 42
-    shot("pair")
     st.wifi_nets = [
         {"ssid": "BT-Hub6-7G2K", "signal": 82, "secure": True, "active": True, "known": True},
         {"ssid": "SKY4F1A2", "signal": 64, "secure": True, "active": False, "known": False},
-        {"ssid": "Fred's iPhone", "signal": 41, "secure": True, "active": False, "known": True},
         {"ssid": "TP-Link_Guest", "signal": 22, "secure": False, "active": False, "known": False},
     ]
     build_wifi(st)
     st.screen, st.wsel = "wifi", 1
     shot("wifi")
-    st.screen, st.text_target, st.text, st.kb_r, st.kb_c = "text", "SKY4F1A2", "hunter2", 2, 3
-    st.text_error = "wi-fi passwords are at least 8 characters."
-    shot("wifi-password")
-    st.text_error = ""
-    st.vita = None
-    st.screen = "home"
-    st.error = "vita found but no picture (try 2). trying again..."
-    shot("home-error")
-    st.error = ""
+    st.screen = "update"
+    st.upd = {"to": "1.4.0", "pct": 47, "msg": "installing gstreamer1.0-plugins-bad (arm64)", "state": "running",
+              "started": time.time() - 83, "log": []}
+    shot("update")
+    st.screen, st.vita = "home", None
     shot("home-720p", 1280, 720)
 
 
@@ -2105,6 +2883,8 @@ def main(argv):
         print("bluetooth audio " + argv[2])
     elif cmd == "apply-output":
         print("changed" if apply_output_mode(load_config()) else "already set")
+    elif cmd == "plymouth-theme" and len(argv) == 3:
+        cmd_plymouth_theme(argv[2])
     elif cmd == "screenshot" and len(argv) == 3:
         cmd_screenshot(argv[2])
     elif cmd in ("version", "--version"):

@@ -37,11 +37,23 @@ if grep -q '^BT_AUDIO=yes' "$CONF" 2>/dev/null && [ -f "$LIB/vitadock.py" ]; the
 fi
 
 echo "putting the boot settings back"
+if [ -n "$BOOT_DIR" ] && [ -f "$BOOT_DIR/config.txt" ]; then
+  as_root sed -i '/^# VitaDock++ usb power boost$/,+2d' "$BOOT_DIR/config.txt"
+fi
 as_root systemctl set-default "${TARGET_BEFORE:-multi-user.target}" >/dev/null 2>&1
 if [ -n "$BOOT_DIR" ]; then
   for f in cmdline.txt config.txt; do
     [ -f "$BOOT_DIR/$f.vitadock-bak" ] && as_root mv "$BOOT_DIR/$f.vitadock-bak" "$BOOT_DIR/$f"
   done
+fi
+
+if [ -d /usr/share/plymouth/themes/vitadock ]; then
+  echo "removing the boot animation"
+  as_root rm -rf /usr/share/plymouth/themes/vitadock
+  if command -v plymouth-set-default-theme >/dev/null; then
+    as_root plymouth-set-default-theme -r >/dev/null 2>&1
+    ls "${BOOT_DIR:-/boot/firmware}"/initramfs* >/dev/null 2>&1 && as_root update-initramfs -u >/dev/null 2>&1
+  fi
 fi
 
 echo "removing files"

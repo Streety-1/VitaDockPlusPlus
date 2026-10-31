@@ -9,15 +9,6 @@
   <img src="https://img.shields.io/badge/license-MIT-e2dfd6?style=flat-square&labelColor=16171b" alt="MIT licence">
 </p>
 
-<p align="center">
-  <a href="#what-youll-need">what you'll need</a> ·
-  <a href="#setting-up-your-vita">vita setup</a> ·
-  <a href="#installing-on-the-pi">install</a> ·
-  <a href="#using-it">using it</a> ·
-  <a href="#troubleshooting">troubleshooting</a> ·
-  <a href="#credits">credits</a>
-</p>
-
 # VitaDock++
 
 VitaDock++ was created as a successor to SilentNightx's [VitaDock+](https://github.com/SilentNightx/VitaDockPlus), which seems to of been discontinued since its last update in November 2023, only works on Pis up to the Pi 4 and has a near 4GB image. Mine is exclusive to the Raspberry Pi 5 running Pi OS Lite, as this offers the best experience with minimal input delay and a one line installer.
@@ -26,208 +17,195 @@ VitaDock++ was created as a successor to SilentNightx's [VitaDock+](https://gith
   <img src=".github/assets/how-it-works.png" alt="vita to pi 5 over usb, pi 5 to tv over hdmi" width="100%">
 </p>
 
-Your Vita runs a plugin (xerpi's udcd_uvc or one based on it) that makes it show up as a USB webcam, and with some plugins a USB sound card too. The Pi picks that up, plays it full screen with mpv (straight to the screen, no desktop in the way) and upscales it to your TV. When the Vita isn't plugged in you get a waiting screen, and there's a settings menu on the TV for everything else, so you never need SSH or a desktop.
+You put a plugin on the Vita that makes it act like a USB webcam (and with some plugins a USB sound card too), plug it into the Pi, and the Pi puts it on the TV. There's no desktop running and nothing to log into after the install. When the Vita's unplugged you get a waiting screen, and everything else is in a menu on the TV that works with a keyboard, mouse or USB pad.
 
-## What you'll need
+## What you need
 
-- A **PS Vita** with HENkaku/taiHEN. If yours isn't hacked yet, follow [vita.hacks.guide](https://vita.hacks.guide/) first and come back.
-- A **Raspberry Pi 5**, any RAM size. You'll need its official power supply too, as cheap ones cause all sorts of problems.
-- A **micro SD card** (8GB or more), plus a **micro HDMI to HDMI cable**.
-- A **USB cable** for the Vita: micro USB for the slim (PCH-2000), or Sony's own cable for the original (PCH-1000). Make sure it's a data cable and not a charge-only one.
-- A **USB keyboard, mouse or USB pad** for the Pi. You need it for the install and for the settings menu. The controller you actually play with pairs with the Vita, not the Pi.
+- A hacked PS Vita (HENkaku/taiHEN). If yours isn't done yet, [vita.hacks.guide](https://vita.hacks.guide/) is the place to start.
+- A Raspberry Pi 5. Any amount of RAM is fine.
+- The official Pi 5 power supply. Cheap ones cause weird problems, and the official 27W one also lets the dock charge the Vita faster (see [charging](#charging)).
+- A micro SD card, 8GB or bigger, and a micro HDMI to HDMI cable.
+- A USB cable for the Vita. Micro USB for the slim, Sony's own cable for the original. It has to be a data cable, plenty of cheap ones only charge.
+- A USB keyboard, mouse or pad for the Pi. You need it to install, and to use the menu. Your actual controller pairs with the Vita, not the Pi.
 
-## Setting up your Vita
+## Setting up the Vita
 
-First pick a plugin. You only install one, and the dock works out which one you've got when you plug the Vita in.
+First pick a plugin. You only put one on the Vita, and the dock works out which one you've got when you plug in.
 
-| plugin | sound | notes |
-|---|---|---|
-| [udcd_uvc](https://github.com/xerpi/vita-udcd-uvc/releases) by xerpi | no, video only | the original and the most tested. for sound use a cable or the dock's Bluetooth audio |
-| [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120 | yes, over the same USB cable | based on udcd_uvc with USB audio added. open source, but new, and its own notes say it hasn't been tested on a real console yet |
-| [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream) by BMK-Studio | yes, over the same USB cable | beta, no release or source code out yet. you have to turn streaming on in its *VUS Control* app each time |
-
-If you're not sure, go with udcd_uvc first and get the picture working, then try vitastream if you want sound over USB.
+- [udcd_uvc](https://github.com/xerpi/vita-udcd-uvc/releases) by xerpi is the original. Picture only, so sound goes over a cable or the dock's Bluetooth audio. It's the most tested one, so start with this if you're not sure.
+- [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120 is udcd_uvc with sound over USB added. Open source, but new, and its notes say that release hasn't been tested on a real console yet.
+- [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream) by BMK-Studio also does picture and sound over USB. It's a beta with no release or source code out yet, and you have to switch streaming on in its *VUS Control* app each time.
 
 ### udcd_uvc or vitastream
 
-1. Download the plugin from the releases page in the table. Both come in three versions, so pick the one for your Vita:
+Both come in three versions. The ones ending `_lcd_off.skprx` (slim) and `_oled_off.skprx` (original) turn the Vita's screen off while it's docked, which saves battery and helps it charge. The plain `.skprx` one leaves the screen on and works on either.
 
-   | file ends in | for | what it does |
-   |---|---|---|
-   | `_lcd_off.skprx` | slim (PCH-2000) | turns the Vita's screen off while docked |
-   | `_oled_off.skprx` | original (PCH-1000) | turns the Vita's screen off while docked |
-   | just `.skprx` | either | leaves the screen on |
-
-2. Get it into `ur0:tai/` on the Vita. VitaShell's USB mode only shows your memory card (or SD2Vita), so copy it onto that first. Then in VitaShell on the Vita, copy it from there into `ur0:tai/`.
-3. Still in VitaShell, open `ur0:tai/config.txt` and add the plugin under `*KERNEL`, with the filename you used:
+1. Copy the plugin onto your memory card or SD2Vita. VitaShell's USB mode only shows that, not the Vita's internal storage.
+2. In VitaShell on the Vita, copy it from there into `ur0:tai/`.
+3. Open `ur0:tai/config.txt` in VitaShell and add it under `*KERNEL` using the filename you copied:
    ```
    *KERNEL
    ur0:tai/udcd_uvc_lcd_off.skprx
    ```
-   Only have one of these plugins in there at a time. If you're swapping from udcd_uvc to vitastream, replace the line rather than adding a second one.
+   Only have one of these plugins in there at once. If you're swapping, replace the line.
 4. Reboot the Vita.
 
-If the Vita won't boot after this, hold **L** while it starts up. That skips plugins so you can fix the config. To check it's working, plug the Vita into a PC and it should show up as a camera.
+If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
 
 ### VitaUSBStream
 
-Follow [its readme](https://github.com/BMK-Studio/VitaUSBStream). It installs as a `.vpk` with a plugin, and you open *VUS Control* on the Vita and switch streaming on before plugging into the dock. Take any udcd_uvc line out of `config.txt` first.
+Follow [its readme](https://github.com/BMK-Studio/VitaUSBStream). It installs as a `.vpk`, and you open *VUS Control* and switch streaming on before plugging into the dock. Take any udcd_uvc line out of `config.txt` first.
 
 ## Installing on the Pi
 
-1. Flash **Raspberry Pi OS Lite (64-bit)** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). In the settings, set a username and password, and add your Wi-Fi if you're not using ethernet. It needs internet for the install. You can change the Wi-Fi later from the dock's menu.
-2. Put the card in the Pi, plug in a keyboard and the TV, and log in.
-3. Run this:
+1. Flash **Raspberry Pi OS Lite (64-bit)** with [Raspberry Pi Imager](https://www.raspberrypi.com/software/). In Imager's settings set a username and password, and your Wi-Fi if you're not using a cable. It needs the internet for the install.
+2. Boot the Pi with a keyboard plugged in and log in.
+3. Run:
    ```
    curl -fsSL https://raw.githubusercontent.com/Streety-1/VitaDockPlusPlus/main/install.sh | bash
    ```
-4. Say yes when it asks, wait a few minutes for it to finish, and let it reboot.
+4. Say yes, give it a few minutes, and let it reboot.
 
-That's the only typing you'll ever do on it. From then on the Pi boots straight into the dock.
+That's the last time you need to type anything. From then on the Pi boots straight into the dock.
 
-<details>
-<summary>installing from a downloaded copy instead</summary>
-
-```
-git clone https://github.com/Streety-1/VitaDockPlusPlus.git
-cd VitaDockPlusPlus
-bash install.sh
-```
-
-Options: `--yes` skips the questions, `--no-reboot` won't reboot at the end, and `--reset-config` puts the settings back to default.
-</details>
+If you'd rather not type the curl line, download the repo onto a USB stick, plug it into the Pi, and run `sudo mount /dev/sda1 /mnt` then `bash /mnt/VitaDockPlusPlus/install.sh` (use whatever you called the folder). The same works for updating.
 
 ## Using it
 
-Plug the Vita into any USB port on the Pi and the game shows up on the TV. Unplug it and you're back to the waiting screen.
+Plug the Vita into any USB port on the Pi and the game comes up on the TV. Unplug it and you're back at the waiting screen.
 
-To get into the settings menu:
+To open the menu, press Enter on a keyboard, click a mouse, or press A on a USB pad. Mid-game it's Esc, Tab or the Windows key, a right click, or the PS/Home button (or Start and Select together).
 
-| | on the waiting screen | mid-game |
-|---|---|---|
-| keyboard | Enter | Esc, Tab or the Windows key |
-| mouse | left click | right click |
-| USB pad | A | PS/Home button, or Start + Select |
+In the menu, up and down move, Enter or A picks something, and Esc or B goes back. Left and right change a setting without opening it. Everything has a description at the bottom of the screen, so you can poke around without breaking anything. It's split up like this:
 
-The menu has:
+- **picture**: what the Pi asks the Vita for, sharpness, speed, and the TV mode
+- **sound**: sound over USB, Bluetooth audio, and the dock's own sounds
+- **wi-fi**: see what the Pi's connected to, or join another network
+- **power and charging**: USB power for the Vita, restart and shut down
+- **system**: what's plugged in, updates, uninstalling
+- **help**: the controls and plugins, in case you forget
 
-- **Video mode.** This is what the Pi asks the Vita to send:
+## The picture
 
-  | mode | from the Vita | notes |
-  |---|---|---|
-  | `smooth` | 864x488 @ 60fps | the default. best for most games |
-  | `sharp` | 960x544 @ 30fps | native res but half the frames |
-  | `native60` | 960x544 @ ~60fps | native res, but the plugin can't quite hold 60 so expect some judder |
-  | `hd` | 1280x720 @ 30fps | only works with Sharpscale and a 720p patch for that game |
+The default is native resolution, pixel perfect, fast.
 
-- **Player.** `fast` is the default and has the least delay (see [input delay](#input-delay)). `compatible` uses mpv instead, which is a bit slower but lets you pick the upscaling filter (lanczos, spline36 or bilinear).
-- **TV resolution.** 1080p at 60Hz by default. You can also pick 720p, 4K or whatever your TV prefers. This one kicks in after a restart.
-- **Wi-Fi.** Shows which network the Pi is on and lets you join a different one. Type the password on a keyboard, or use the on-screen keyboard if you've only got a pad or mouse. You can also forget networks or turn Wi-Fi off from here.
-- **USB audio**, plus **Bluetooth audio** and pairing (see [sound](#sound)).
-- **Info + help.** Shows what the Pi can see: the TV, the Vita and its IP address.
-- **Check for updates**, restart, shut down and uninstall.
+The Vita's screen is 960x544, which is almost exactly half of 1080p. So by default the dock asks the Vita for its real resolution and doubles every pixel with no smoothing, which is why it looks sharp instead of mushy. To fit 1080 exactly it trims 2 lines off the top and bottom, which you won't notice. On a 4K TV it does exactly the same at 4x. If you'd rather have the softer look that fills the screen, set sharpness to smooth.
+
+For real 720p there's the *720p (sharpscale)* video mode. That needs [Sharpscale](https://forum.devchroma.nl/index.php?topic=112.0) plus a 720p patch for the game on the Vita, and only runs at 30fps. You don't need it for everything above.
 
 ## Input delay
 
-Keeping the delay down was the whole point of this, so here's what it does:
+There are three speeds:
 
-- **The fast player.** The Vita's picture goes straight from the USB capture to the Pi 5's display hardware, which does the upscaling itself. There's only ever one frame waiting, and if the Pi falls behind for a moment it throws the old frame away instead of queueing it. Queued-up frames are what cause that half a second (or worse) of lag you get with most capture setups.
-- **CPU at full speed** while docked, so frames never wait for it to ramp up.
-- **USB power saving turned off**, so the Vita's connection never gets paused.
-- **A proper 60Hz output** set at boot, so the TV isn't running at 30 or 50Hz.
+- **fast** (the default). The Pi 5's display hardware does the scaling, and if anything falls behind, the old frame gets thrown away instead of queued up. Queued-up frames are what give most capture setups half a second of lag.
+- **super fast** goes further. There's no buffering at all, it runs at realtime priority, and the USB and video are kept on one CPU core. If your TV can do 1080p at 120Hz, it uses that (restart once after picking it).
+- **compatible** uses mpv. It has more delay, but it's there as a fallback, and the dock switches to it by itself if the other two don't work on your setup.
 
-The rest is down to your TV and the mode you pick:
+Whichever speed you pick, the dock also runs the CPU at full speed, stops USB power saving from pausing the Vita, and locks the TV to a proper 60Hz (or 120Hz) at boot.
 
-- **Turn on game mode on your TV** for that HDMI input. TVs can add 50 to 150ms of their own processing otherwise. Honestly this matters as much as anything above.
-- **Use `smooth` (60fps).** At 30fps every frame is on screen twice as long, so it feels laggier even with the same pipeline.
-- **Use the fast player.** It's the default, and *info + help* in the menu shows which one is actually running.
+The other half of the delay is your TV, so turn on **game mode** for that HDMI input. It makes as much difference as anything above.
 
-If you want to measure it, swap the Vita plugin for the normal `udcd_uvc.skprx` (the one that keeps the Vita's screen on), film the Vita and the TV together in slow motion on your phone, and count the frames between the two.
+If you want to measure it, put the normal screen-on plugin on the Vita, film the Vita and the TV together in slow motion on your phone, and count the frames between them.
 
 ## Sound
 
-How you get sound depends on the plugin:
+- **Over USB** if you're using vitastream or VitaUSBStream. Nothing to set up, the dock notices and plays it out of the TV. The Vita's own speaker goes quiet while it does, that's normal.
+- **A 3.5mm cable** from the Vita's headphone socket to the TV or speakers. Works with any plugin and is the most reliable. If you hear a hum, try a ground loop isolator.
+- **Bluetooth** (a bit experimental) for udcd_uvc. Turn it on under *sound*, pick *pair the vita over bluetooth*, then on the Vita go to Settings > Devices > Bluetooth Devices and pick VitaDock++. After that you just connect from the Vita.
 
-- **USB (vitastream or VitaUSBStream).** Nothing to set up, it just works. The dock spots that the Vita is sending sound over the cable and plays it out of the TV. It's on by default (*usb audio* in the menu), and *info + help* shows when it's working. The Vita's own speaker goes quiet while it's streaming sound over USB, which is normal.
-- **A 3.5mm cable** from the Vita's headphone socket to your TV, soundbar or speakers. Works with any plugin and is the most reliable. If you hear a hum, turn off *Settings > System > USB Power Supply* on the Vita.
-- **Bluetooth (experimental).** For udcd_uvc. Turn on *bluetooth audio* in the menu, then pick *pair the vita for audio*. On the Vita, go to *Settings > Devices > Bluetooth Devices* and choose **VitaDock++**. After that you just connect from that menu on the Vita each time, and the sound comes out of the TV over HDMI. Don't use this together with a USB audio plugin.
+## Charging
+
+The Vita only charges from the dock if you turn on **Settings > System > USB Power Supply** on the Vita. If you turned it off to stop a hum on a cable, it needs to be back on.
+
+Even then it's slow. The Pi's USB ports are the same kind as a computer's, so the Vita only takes about 500mA from them. While you're playing that roughly breaks even. Two things help:
+
+- Use the screen-off version of the plugin (`_lcd_off` or `_oled_off`). The Vita's screen is the biggest drain, so with it off more power goes to the battery.
+- If you've got the official 27W (5A) power supply, turn on **usb power for the vita** under *power and charging*. The Pi 5 only gives its USB ports 600mA between them unless it knows it's on a 5A supply, and this lifts that to 1.6A. Don't turn it on with a weaker supply.
 
 ## Controllers
 
-Pair your controller with the **Vita**, since that's what's running the game. DualShock 3 and 4 work out of the box. [MiniVitaTV](https://github.com/TheOfficialFloW/MiniVitaTV) is worth installing too, as it makes games use their PS TV control layouts. Touch screen and rear touch obviously won't work while it's on the TV, so pick games that are fine on buttons.
+Pair your controller with the Vita, since that's what's running the game. DualShock 3 and 4 work out of the box, and [MiniVitaTV](https://github.com/TheOfficialFloW/MiniVitaTV) is worth having so games use their PS TV control layouts. Touch controls don't work while it's on the TV, so pick games that are fine on buttons.
 
 ## Updating
 
-Pick *check for updates* in the menu (the Pi needs to be online). If there's a new version it asks first, then shows a progress bar while it downloads and installs. When it's done the dock restarts by itself and the waiting screen says what version you're on now. Your settings are kept.
+Pick *check for updates* under *system*. If there's a new version it asks first, then shows a progress bar while it installs and restarts the dock when it's done. Your settings are kept. The first update after a big release can take a few minutes because it has to download new packages. If something goes wrong it tells you what, and the full log is in `/var/log/vitadock-update.log`.
 
-The first update after a big release can take a few minutes, because it has to download new packages. If something goes wrong the update screen tells you what happened and shows the end of the log. The full log is in `/var/log/vitadock-update.log`.
+Running the installer again (curl line or USB stick) also updates it.
 
-You can also update by running the installer again, either the curl line or `bash install.sh` from a USB stick. It spots the existing install and keeps your settings.
-
-> **On 1.1.0 to 1.3.0?** The update option in those versions was broken. Updating now works, but the old version's screen just says "updating" with no progress bar. Leave it for about 5 to 10 minutes and the dock restarts on the new version. Or run the installer again from USB or with the curl line.
+On 1.1.0 to 1.3.0 the update option was broken. It works now, but the old screen just says "updating" with no progress bar, so leave it 5 to 10 minutes. Or run the installer again.
 
 ## Uninstalling
 
-Pick *uninstall vitadock++* in the menu. It removes everything, puts the boot settings back and restarts into plain Pi OS Lite.
+*system > uninstall vitadock++* removes everything, puts the boot settings back and restarts into plain Pi OS Lite.
 
 ## Troubleshooting
 
-<details>
-<summary><b>the TV says no signal / black screen</b></summary>
+*system > what's plugged in* shows what the Pi can see. If you can get to a terminal (Ctrl+Alt+F2 with a keyboard), `vitadock status` and `journalctl -u vitadock -n 50` help too.
 
-Turn the TV on before the Pi. Use the HDMI port next to the Pi's power socket (HDMI 0). If it's still blank, use the menu to set *tv resolution* to *preferred*.
+<details>
+<summary>black screen or "no signal"</summary>
+
+Turn the TV on before the Pi. Use the HDMI port next to the power socket. If it's still blank, set *picture > tv resolution* to *tv's choice* and restart.
 </details>
 
 <details>
-<summary><b>the waiting screen shows but the Vita never appears</b></summary>
+<summary>the waiting screen shows but the Vita never appears</summary>
 
-- Try a different USB cable. Loads of them are charge-only.
-- Reboot the Vita. Having lots of plugins, or a slow SD2Vita/storage plugin, can stop udcd_uvc from connecting. If you're on StorageMgr, switching to yamt-vita can help.
-- Make sure it shows up as a camera on a PC. If it doesn't there either, it's the Vita side.
+Try another USB cable, loads only charge. Reboot the Vita. Lots of Vita plugins, or a slow SD2Vita setup, can stop the video plugin connecting. If it doesn't show up as a camera on a PC either, it's the Vita side.
 </details>
 
 <details>
-<summary><b>"vita found but no picture"</b></summary>
+<summary>"vita found but no picture"</summary>
 
-Usually the video format. Edit `/etc/vitadock.conf` (Ctrl+Alt+F2 on a keyboard gets you a login), change `VITA_PIXFMT=auto` to `VITA_PIXFMT=yuyv422` and reboot.
+Usually the video format. Edit `/etc/vitadock.conf`, change `VITA_PIXFMT=auto` to `VITA_PIXFMT=yuyv422` and reboot. If it started after you picked super fast or fast, the dock will drop back to compatible by itself after a couple of tries.
 </details>
 
 <details>
-<summary><b>it feels laggy</b></summary>
+<summary>colours look off</summary>
 
-Turn on your TV's **game mode** for that HDMI input first, as that's usually the biggest difference. Then check *info + help* says the player is **fast**. If it says compatible, either the fast player isn't installed (re-run the installer or update from the menu) or it didn't work with your setup, which the dock log will show. Use `smooth` mode for 60fps.
+The dock tells the display the Vita sends full-range colour, which is what the plugin uses. If it looks too dark or too punchy on yours, set `COLOR_FIX=off` in `/etc/vitadock.conf`.
 </details>
 
 <details>
-<summary><b>an update failed</b></summary>
+<summary>a big black border round the picture</summary>
 
-The update screen shows the reason and the end of the log. Most of the time it's the Pi not being online, which you can sort out in the menu's *wi-fi* screen. Then try again. The whole log is in `/var/log/vitadock-update.log`. If it keeps failing, run the installer again from a USB stick or with the curl line.
+Pixel perfect only uses whole-number scaling, so on some TV modes it can't fill the screen. Use 1080p or 4K for the TV mode, or switch sharpness to smooth.
 </details>
 
 <details>
-<summary><b>bluetooth audio crackles or won't connect</b></summary>
+<summary>it still feels laggy</summary>
 
-It is experimental. It tends to settle down after the first minute. If it won't connect at all, turn bluetooth audio off and on again in the menu, then pair again. The cable is always the safe option.
+Turn on game mode on the TV first. Then make sure the speed is fast or super fast (*system > what's plugged in* shows which one's actually running) and the video mode is a 60fps one.
 </details>
 
-If none of that helps, [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues) and include a photo of the *info + help* screen. If you can get to a terminal, the output of `vitadock status` and `journalctl -u vitadock -n 50` helps a lot too.
+<details>
+<summary>an update failed</summary>
+
+The update screen says why. Most of the time the Pi isn't online, which you can sort out under *wi-fi*. Otherwise run the installer again.
+</details>
+
+<details>
+<summary>Bluetooth audio crackles or won't connect</summary>
+
+It's experimental. It usually settles down after a minute. If it won't connect at all, turn it off and on again under *sound* and pair again.
+</details>
+
+If none of that helps, [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues). A photo of *what's plugged in* helps a lot.
 
 ## Credits
 
-None of this would exist without these people:
-
-- **[xerpi](https://github.com/xerpi)** for [vita-udcd-uvc](https://github.com/xerpi/vita-udcd-uvc), the plugin that gets video out of the Vita in the first place.
-- **[SilentNightx](https://github.com/SilentNightx)** and the original VitaDock team (Bu, ZoidBerg, Si, David-OX and Crash) for [VitaDock+](https://github.com/SilentNightx/VitaDockPlus) and the original VitaDock, which this is based on the idea of.
-- **[devnoname120](https://github.com/devnoname120)** for [vitastream](https://github.com/devnoname120/vitastream) and **[BMK-Studio](https://github.com/BMK-Studio)** for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream), which add sound over USB.
-- **[TheOfficialFloW](https://github.com/TheOfficialFloW)**, Team Molecule and everyone behind HENkaku and taiHEN.
-- **[mpv](https://mpv.io/)**, **[pygame](https://www.pygame.org/)** and **[bluez-alsa](https://github.com/arkq/bluez-alsa)**, which do the heavy lifting on the Pi.
+- [xerpi](https://github.com/xerpi) for [vita-udcd-uvc](https://github.com/xerpi/vita-udcd-uvc). None of this would work without it.
+- [SilentNightx](https://github.com/SilentNightx) and the original VitaDock team (Bu, ZoidBerg, Si, David-OX and Crash) for [VitaDock+](https://github.com/SilentNightx/VitaDockPlus) and the original VitaDock.
+- [devnoname120](https://github.com/devnoname120) for [vitastream](https://github.com/devnoname120/vitastream) and [BMK-Studio](https://github.com/BMK-Studio) for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream).
+- [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku and taiHEN.
+- [GStreamer](https://gstreamer.freedesktop.org/), [mpv](https://mpv.io/), [pygame](https://www.pygame.org/), [Plymouth](https://www.freedesktop.org/wiki/Software/Plymouth/) and [bluez-alsa](https://github.com/arkq/bluez-alsa), which do the heavy lifting on the Pi.
 
 ## Disclaimer
 
-This is a fan project. It isn't affiliated with, endorsed by or connected to Sony Interactive Entertainment or Raspberry Pi Ltd. PlayStation and PS Vita are trademarks of Sony Interactive Entertainment, and Raspberry Pi is a trademark of Raspberry Pi Ltd.
+This is a fan project. It's not affiliated with or endorsed by Sony Interactive Entertainment or Raspberry Pi Ltd. PlayStation and PS Vita are trademarks of Sony Interactive Entertainment, and Raspberry Pi is a trademark of Raspberry Pi Ltd.
 
-VitaDock++ doesn't include, download or help you get any games or copyrighted material. It only shows what your own Vita is outputting. Modding your Vita is at your own risk, and so is everything else here. It's provided as-is with no warranty, so if something breaks, that's on you, not me.
+VitaDock++ doesn't include, download or help you get any games. It just shows what your own Vita is outputting. Modding your Vita is at your own risk, as is everything else here. It comes as-is with no warranty, so if something breaks, that's on you.
 
 ## Licence
 
-[MIT](LICENSE). Do what you like with it, just keep the licence file in.
+[MIT](LICENSE).

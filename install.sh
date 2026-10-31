@@ -188,14 +188,17 @@ export DEBIAN_FRONTEND=noninteractive
 progress 10 "checking for package updates"
 as_root apt-get update -q || die "couldn't reach the package servers. is the pi online?"
 progress 14 "installing packages"
-apt_install 14 50 mpv v4l-utils alsa-utils python3 python3-pygame python3-evdev fonts-dejavu-core curl \
+apt_install 14 50 mpv v4l-utils alsa-utils python3 python3-pygame python3-evdev python3-pil fonts-dejavu-core curl \
   || die "apt couldn't install the packages it needs. check the pi is online and try again."
 progress 50 "installing the fast player"
 apt_install 50 76 gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
   || warn "couldn't install gstreamer, so the dock will use the slower mpv player."
 progress 76 "installing bluetooth audio bits"
-apt_install 76 84 bluez bluez-alsa-utils bluez-tools \
+apt_install 76 81 bluez bluez-alsa-utils bluez-tools \
   || warn "couldn't install the bluetooth audio packages. everything else will still work."
+progress 81 "installing the boot splash"
+HAVE_PLYMOUTH=yes
+apt_install 81 85 plymouth || { HAVE_PLYMOUTH=no; warn "couldn't install plymouth, so no boot animation. no big deal."; }
 
 step "copying files"
 progress 86 "copying files"
@@ -210,6 +213,10 @@ as_root chmod 755 /usr/local/bin/vitadock
 if [ ! -f "$CONF" ] || [ "$RESET" = yes ]; then
   as_root install -m 644 "$SRC/src/vitadock.conf" "$CONF"
 else
+  if ! grep -q '^SHARPNESS=' "$CONF" && grep -q '^VITA_MODE=864x488' "$CONF"; then
+    as_root sed -i 's/^VITA_MODE=864x488/VITA_MODE=960x544/' "$CONF"
+    say "switched the video mode to native 960x544, it's much sharper"
+  fi
   while IFS= read -r line; do
     key=${line%%=*}
     grep -qE "^$key=" "$CONF" || printf '%s\n' "$line" | as_root tee -a "$CONF" >/dev/null
@@ -242,7 +249,9 @@ if [ -n "$BOOT_DIR" ]; then
   CMD=$BOOT_DIR/cmdline.txt
   [ -f "$CMD.vitadock-bak" ] || as_root cp "$CMD" "$CMD.vitadock-bak"
   line=$(head -n1 "$CMD")
-  for tok in quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 usbcore.autosuspend=-1; do
+  toks="quiet loglevel=3 logo.nologo vt.global_cursor_default=0 consoleblank=0 usbcore.autosuspend=-1"
+  [ "$HAVE_PLYMOUTH" = yes ] && toks="$toks splash plymouth.ignore-serial-consoles"
+  for tok in $toks; do
     [[ " $line " == *" $tok "* ]] || line="$line $tok"
   done
   printf '%s\n' "$line" | as_root tee "$CMD" >/dev/null
@@ -255,6 +264,20 @@ if [ -n "$BOOT_DIR" ]; then
   fi
 else
   warn "couldn't find cmdline.txt, so the boot text will still show. no big deal."
+fi
+
+if [ "$HAVE_PLYMOUTH" = yes ] && command -v plymouth-set-default-theme >/dev/null; then
+  progress 96 "setting up the boot animation"
+  THEME=/usr/share/plymouth/themes/vitadock
+  if as_root /usr/bin/python3 "$LIB/vitadock.py" plymouth-theme "$THEME" >/dev/null; then
+    if ls "${BOOT_DIR:-/boot/firmware}"/initramfs* >/dev/null 2>&1; then
+      as_root plymouth-set-default-theme -R vitadock || warn "couldn't rebuild the initramfs for the boot animation."
+    else
+      as_root plymouth-set-default-theme vitadock || warn "couldn't set the boot animation."
+    fi
+  else
+    warn "couldn't make the boot animation."
+  fi
 fi
 
 if [ "$INSTALLED" = yes ]; then

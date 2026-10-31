@@ -7,11 +7,12 @@ labels: bug
 **what happened**
 
 **your setup**
-- Pi: (e.g. Pi 5 4GB)
+- Pi: (e.g. Pi 5 4GB, official 27W supply)
 - Pi OS: (e.g. Lite 64-bit, Trixie)
-- Vita: (slim / OLED) and which udcd_uvc file you used
-- VitaDock++ version: (shown top left on the tv)
+- Vita: (slim / OLED) and which plugin file you used
+- VitaDock++ version: (top left of the screen on the tv)
+- speed and sharpness: (from the picture menu)
 
-**info screen**
+**what's plugged in**
 
-**logs (if you can)**
+**logs, if you can get to a terminal**
