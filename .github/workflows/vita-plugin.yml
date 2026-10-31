@@ -1,0 +1,21 @@
+name: vita plugin
+
+on:
+  push:
+    paths:
+      - "vita-plugin/**"
+      - ".github/workflows/vita-plugin.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: vitasdk/vitasdk:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build vitadock.skprx
+        run: make -C vita-plugin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vitadock-plugin
+          path: vita-plugin/vitadock.skprx
