@@ -2171,8 +2171,7 @@ class Dock:
         st = self.st
         if not usb_audio_wanted(st.cfg):
             return None
-        if not st.vita_audio:
-            st.vita_audio = vita_audio_card(st.vita)
+        st.vita_audio = vita_audio_card(st.vita)
         if not st.vita_audio or not shutil.which("alsaloop"):
             return None
         out = audio_out(st.cfg, st.disp)
@@ -2228,7 +2227,15 @@ class Dock:
         stop, hit = threading.Event(), threading.Event()
         t = threading.Thread(target=self.hotkeys.watch, args=(stop, hit), daemon=True)
         t.start()
+        audio_tries, next_audio = 0, time.monotonic() + 1
         while proc.poll() is None:
+            now = time.monotonic()
+            if now >= next_audio and usb_audio_wanted(st.cfg) and (audio is None or audio.poll() is not None):
+                audio_tries += 1
+                if audio is not None:
+                    log("usb audio stopped, starting it again")
+                audio = self.start_audio()
+                next_audio = now + (1 if audio_tries < 10 else 5)
             if hit.is_set():
                 proc.terminate()
                 try:
