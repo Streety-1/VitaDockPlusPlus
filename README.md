@@ -52,6 +52,21 @@ Both come in three versions. The ones ending `_lcd_off.skprx` (slim) and `_oled_
 
 If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
 
+### Keeping the screen off
+
+The screen-off versions switch the Vita's screen off once, when it connects. After a few minutes the Vita's power saving changes the brightness, and that's enough to turn the screen back on, so it can come back on mid-game. VitaDock++ has its own little plugin for this. It keeps the screen off while the Vita is on the dock and puts it back the moment you unplug. It does nothing at all the rest of the time.
+
+1. Download [vitadock.skprx](https://github.com/Streety-1/VitaDockPlusPlus/raw/main/vita-plugin/vitadock.skprx) and put it in `ur0:tai/` the same way as above.
+2. Add it under `*KERNEL`, **below** your video plugin:
+   ```
+   *KERNEL
+   ur0:tai/vitastream_lcd_off.skprx
+   ur0:tai/vitadock.skprx
+   ```
+3. Reboot the Vita.
+
+It works on the slim and the original, with any of the screen-off versions of udcd_uvc or vitastream. It's new, so if the Vita misbehaves, take its line out of `config.txt` and let me know. The source is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes.
+
 ### VitaUSBStream
 
 Follow [its readme](https://github.com/BMK-Studio/VitaUSBStream). It installs as a `.vpk`, and you open *VUS Control* and switch streaming on before plugging into the dock. Take any udcd_uvc line out of `config.txt` first.
@@ -205,7 +220,8 @@ If none of that helps, [open an issue](https://github.com/Streety-1/VitaDockPlus
 - [xerpi](https://github.com/xerpi) for [vita-udcd-uvc](https://github.com/xerpi/vita-udcd-uvc). None of this would work without it.
 - [SilentNightx](https://github.com/SilentNightx) and the original VitaDock team (Bu, ZoidBerg, Si, David-OX and Crash) for [VitaDock+](https://github.com/SilentNightx/VitaDockPlus) and the original VitaDock.
 - [devnoname120](https://github.com/devnoname120) for [vitastream](https://github.com/devnoname120/vitastream) and [BMK-Studio](https://github.com/BMK-Studio) for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream).
-- [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku and taiHEN.
+- [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku, and [Yifan Lu](https://github.com/yifanlu) for [taiHEN](https://github.com/yifanlu/taiHEN), which the screen plugin uses to do its thing.
+- The [VitaSDK](https://vitasdk.org) team for the toolchain and the [vita-headers](https://github.com/vitasdk/vita-headers) docs.
 - [GStreamer](https://gstreamer.freedesktop.org/), [mpv](https://mpv.io/), [pygame](https://www.pygame.org/), [Plymouth](https://www.freedesktop.org/wiki/Software/Plymouth/) and [bluez-alsa](https://github.com/arkq/bluez-alsa), which do the heavy lifting on the Pi.
 
 ## Disclaimer
