@@ -1,0 +1,42 @@
+name: release downloads
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to attach the files to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    container: vitasdk/vitasdk:latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: build vitadock.skprx
+        run: make -C vita-plugin
+      - name: make the usb zip
+        run: |
+          apk add --no-cache zip github-cli 2>/dev/null || (apt-get update && apt-get install -y zip gh)
+          ver=$(cat VERSION)
+          mkdir -p out/VitaDock++
+          tar -cf - --exclude=./.git --exclude=./.github --exclude=./out . | tar -xf - -C out/VitaDock++
+          rm -f out/VitaDock++/vita-plugin/*.o out/VitaDock++/vita-plugin/*.elf \
+                out/VitaDock++/vita-plugin/*.velf out/VitaDock++/vita-plugin/*.skprx
+          cp ".github/release/INSTALL FROM USB.txt" out/VitaDock++/
+          cp vita-plugin/vitadock.skprx out/
+          (cd out && zip -qr "VitaDock++-$ver-usb.zip" VitaDock++)
+      - name: attach to the release
+        run: |
+          ver=$(cat VERSION)
+          gh release upload "$TAG" out/vitadock.skprx "out/VitaDock++-$ver-usb.zip" --clobber -R "$GITHUB_REPOSITORY"

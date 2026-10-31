@@ -1,0 +1,25 @@
+installing (or updating) VitaDock++ from this usb stick
+=======================================================
+
+the pi still needs the internet for this (it downloads gstreamer, mpv and a
+few other bits), it just saves typing the curl line.
+
+1. plug the stick into the pi and log in with a keyboard.
+   if the dock's already running, press ctrl+alt+f2 to get a login.
+
+2. pi os lite doesn't open usb sticks by itself, so mount it:
+
+     sudo mount /dev/sda1 /mnt
+
+   (if that doesn't work, run  lsblk  and use the name it shows, usually sda1)
+
+3. run the installer:
+
+     bash /mnt/VitaDock++/install.sh
+
+   if it's already installed this just updates it and keeps your settings.
+
+4. let it finish, then restart the pi (sudo reboot) so the boot animation
+   and the new tv settings kick in. you can take the stick out after.
+
+after this, updates come from github: menu > system > check for updates.

@@ -17,7 +17,7 @@ VitaDock++ was created as a successor to SilentNightx's [VitaDock+](https://gith
   <img src=".github/assets/how-it-works.png" alt="vita to pi 5 over usb, pi 5 to tv over hdmi" width="100%">
 </p>
 
-You put a plugin on the Vita that makes it act like a USB webcam (and with some plugins a USB sound card too), plug it into the Pi, and the Pi puts it on the TV. There's no desktop running and nothing to log into after the install. When the Vita's unplugged you get a waiting screen, and everything else is in a menu on the TV that works with a keyboard, mouse or USB pad.
+You put a plugin on the Vita that makes it act like a USB webcam and sound card, plug it into the Pi, and the Pi puts it on the TV. There's no desktop running and nothing to log into after the install. When the Vita's unplugged you get a waiting screen, and everything else is in a menu on the TV that works with a keyboard, mouse or USB pad.
 
 ## What you need
 
@@ -30,46 +30,27 @@ You put a plugin on the Vita that makes it act like a USB webcam (and with some 
 
 ## Setting up the Vita
 
-First pick a plugin. You only put one on the Vita, and the dock works out which one you've got when you plug in.
+The Vita needs two plugins:
 
-- [udcd_uvc](https://github.com/xerpi/vita-udcd-uvc/releases) by xerpi is the original. Picture only, so sound goes over a cable or the dock's Bluetooth audio. It's the most tested one, so start with this if you're not sure.
-- [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120 is udcd_uvc with sound over USB added. Open source, but new, and its notes say that release hasn't been tested on a real console yet.
-- [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream) by BMK-Studio also does picture and sound over USB. It's a beta with no release or source code out yet, and you have to switch streaming on in its *VUS Control* app each time.
+- [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120 makes the Vita show up as a USB webcam and sound card, so the picture and the sound both go down the one cable.
+- **vitadock.skprx**, VitaDock++'s own plugin. vitastream switches the Vita's screen off when it connects, but after a few minutes the Vita's power saving changes the brightness and the screen comes back on. This keeps it off while the Vita's on the dock and puts it back the moment you unplug. The rest of the time it does nothing.
 
-### udcd_uvc or vitastream
+Get `vitastream_lcd_off.skprx` if you've got a slim, or `vitastream_oled_off.skprx` for the original, from vitastream's releases. Get `vitadock.skprx` from the [latest VitaDock++ release](https://github.com/Streety-1/VitaDockPlusPlus/releases/latest).
 
-Both come in three versions. The ones ending `_lcd_off.skprx` (slim) and `_oled_off.skprx` (original) turn the Vita's screen off while it's docked, which saves battery and helps it charge. The plain `.skprx` one leaves the screen on and works on either.
-
-1. Copy the plugin onto your memory card or SD2Vita. VitaShell's USB mode only shows that, not the Vita's internal storage.
-2. In VitaShell on the Vita, copy it from there into `ur0:tai/`.
-3. Open `ur0:tai/config.txt` in VitaShell and add it under `*KERNEL` using the filename you copied:
-   ```
-   *KERNEL
-   ur0:tai/udcd_uvc_lcd_off.skprx
-   ```
-   Only have one of these plugins in there at once. If you're swapping, replace the line.
-4. Reboot the Vita.
-
-If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
-
-### Keeping the screen off
-
-The screen-off versions switch the Vita's screen off once, when it connects. After a few minutes the Vita's power saving changes the brightness, and that's enough to turn the screen back on, so it can come back on mid-game. VitaDock++ has its own little plugin for this. It keeps the screen off while the Vita is on the dock and puts it back the moment you unplug. It does nothing at all the rest of the time.
-
-1. Download [vitadock.skprx](https://github.com/Streety-1/VitaDockPlusPlus/raw/main/vita-plugin/vitadock.skprx) and put it in `ur0:tai/` the same way as above.
-2. Add it under `*KERNEL`, **below** your video plugin:
+1. Copy both onto your memory card or SD2Vita. VitaShell's USB mode only shows that, not the Vita's internal storage.
+2. In VitaShell on the Vita, copy them from there into `ur0:tai/`.
+3. Open `ur0:tai/config.txt` in VitaShell and add them under `*KERNEL`, vitastream first:
    ```
    *KERNEL
    ur0:tai/vitastream_lcd_off.skprx
    ur0:tai/vitadock.skprx
    ```
-3. Reboot the Vita.
+   If you had udcd_uvc or another video plugin in there, take its line out. Only one video plugin at a time.
+4. Reboot the Vita.
 
-It works on the slim and the original, with any of the screen-off versions of udcd_uvc or vitastream. It's new, so if the Vita misbehaves, take its line out of `config.txt` and let me know. The source is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes.
+If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
 
-### VitaUSBStream
-
-Follow [its readme](https://github.com/BMK-Studio/VitaUSBStream). It installs as a `.vpk`, and you open *VUS Control* and switch streaming on before plugging into the dock. Take any udcd_uvc line out of `config.txt` first.
+The source for vitadock.skprx is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes. It's new, so if the Vita misbehaves, take its line out of `config.txt` and [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues).
 
 ## Installing on the Pi
 
@@ -120,13 +101,13 @@ Whichever speed you pick, the dock also runs the CPU at full speed, stops USB po
 
 The other half of the delay is your TV, so turn on **game mode** for that HDMI input. It makes as much difference as anything above.
 
-If you want to measure it, put the normal screen-on plugin on the Vita, film the Vita and the TV together in slow motion on your phone, and count the frames between them.
+If you want to measure it, use the plain `vitastream.skprx` (the one that leaves the screen on), film the Vita and the TV together in slow motion on your phone, and count the frames between them.
 
 ## Sound
 
-- **Over USB** if you're using vitastream or VitaUSBStream. Nothing to set up, the dock notices and plays it out of the TV. The Vita's own speaker goes quiet while it does, that's normal.
+- **Over USB** with vitastream. Nothing to set up, the dock notices and plays it out of the TV. The Vita's own speaker goes quiet while it does, that's normal.
 - **A 3.5mm cable** from the Vita's headphone socket to the TV or speakers. Works with any plugin and is the most reliable. If you hear a hum, try a ground loop isolator.
-- **Bluetooth** (a bit experimental) for udcd_uvc. Turn it on under *sound*, pick *pair the vita over bluetooth*, then on the Vita go to Settings > Devices > Bluetooth Devices and pick VitaDock++. After that you just connect from the Vita.
+- **Bluetooth** (a bit experimental) if USB sound gives you trouble. Turn it on under *sound*, pick *pair the vita over bluetooth*, then on the Vita go to Settings > Devices > Bluetooth Devices and pick VitaDock++. After that you just connect from the Vita.
 
 ## Charging
 
@@ -134,7 +115,7 @@ The Vita only charges from the dock if you turn on **Settings > System > USB Pow
 
 Even then it's slow. The Pi's USB ports are the same kind as a computer's, so the Vita only takes about 500mA from them. While you're playing that roughly breaks even. Two things help:
 
-- Use the screen-off version of the plugin (`_lcd_off` or `_oled_off`). The Vita's screen is the biggest drain, so with it off more power goes to the battery.
+- Use the screen-off version of vitastream (`_lcd_off` or `_oled_off`) with vitadock.skprx. The Vita's screen is the biggest drain, so with it off more power goes to the battery.
 - If you've got the official 27W (5A) power supply, turn on **usb power for the vita** under *power and charging*. The Pi 5 only gives its USB ports 600mA between them unless it knows it's on a 5A supply, and this lifts that to 1.6A. Don't turn it on with a weaker supply.
 
 ## Controllers
@@ -180,7 +161,7 @@ Usually the video format. Edit `/etc/vitadock.conf`, change `VITA_PIXFMT=auto` t
 
 Go to *sound > test the sound*. It lists every sound output the Pi has. Pick one and it plays a little tune. If it doesn't work, it says why. When you hear the tune, press enter again and the dock keeps using that one. Check the TV isn't on mute and that *dock sounds* is on.
 
-If the chime works but there's no game sound, *what's plugged in* tells you whether the Vita is sending sound over USB at all. Only vitastream and VitaUSBStream do. udcd_uvc is picture only.
+If the chime works but there's no game sound, *what's plugged in* tells you whether the Vita is sending sound over USB at all. vitastream does. Older plugins like udcd_uvc are picture only.
 </details>
 
 <details>
@@ -217,9 +198,10 @@ If none of that helps, [open an issue](https://github.com/Streety-1/VitaDockPlus
 
 ## Credits
 
-- [xerpi](https://github.com/xerpi) for [vita-udcd-uvc](https://github.com/xerpi/vita-udcd-uvc). None of this would work without it.
+- [xerpi](https://github.com/xerpi) for [vita-udcd-uvc](https://github.com/xerpi/vita-udcd-uvc), the original plugin that made the Vita a USB webcam. vitastream and everything else here is built on it.
 - [SilentNightx](https://github.com/SilentNightx) and the original VitaDock team (Bu, ZoidBerg, Si, David-OX and Crash) for [VitaDock+](https://github.com/SilentNightx/VitaDockPlus) and the original VitaDock.
-- [devnoname120](https://github.com/devnoname120) for [vitastream](https://github.com/devnoname120/vitastream) and [BMK-Studio](https://github.com/BMK-Studio) for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream).
+- [devnoname120](https://github.com/devnoname120) for [vitastream](https://github.com/devnoname120/vitastream), which the dock uses for picture and sound.
+- [BMK-Studio](https://github.com/BMK-Studio) for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream), another take on picture and sound over USB that helped show what was possible.
 - [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku, and [Yifan Lu](https://github.com/yifanlu) for [taiHEN](https://github.com/yifanlu/taiHEN), which the screen plugin uses to do its thing.
 - The [VitaSDK](https://vitasdk.org) team for the toolchain and the [vita-headers](https://github.com/vitasdk/vita-headers) docs.
 - [GStreamer](https://gstreamer.freedesktop.org/), [mpv](https://mpv.io/), [pygame](https://www.pygame.org/), [Plymouth](https://www.freedesktop.org/wiki/Software/Plymouth/) and [bluez-alsa](https://github.com/arkq/bluez-alsa), which do the heavy lifting on the Pi.
