@@ -5,6 +5,9 @@ AUDIO_PCM=auto
 
 pcm=${AUDIO_PCM:-auto}
 if [ "$pcm" = auto ]; then
+  pcm=$(/usr/bin/python3 /usr/local/lib/vitadock/vitadock.py audio-out 2>/dev/null | tail -n1)
+fi
+if [ -z "$pcm" ] || [ "$pcm" = auto ]; then
   pcm=default
   for s in /sys/class/drm/card*-HDMI-A-*/status; do
     [ "$(cat "$s" 2>/dev/null)" = connected ] || continue

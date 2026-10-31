@@ -25,6 +25,7 @@ PROC_ASOUND = os.environ.get("VITADOCK_PROC_ASOUND", "/proc/asound")
 DEV_GLOB = os.environ.get("VITADOCK_DEV_GLOB", "/dev/video*")
 FONT_DIR = "/usr/share/fonts/truetype/dejavu"
 UPDATE_DIR = os.environ.get("VITADOCK_UPDATE_DIR", "/run/vitadock")
+VT_ACTIVE = os.environ.get("VITADOCK_VT_ACTIVE", "/sys/class/tty/tty0/active")
 UPDATE_PROGRESS = UPDATE_DIR + "/update-progress"
 UPDATE_LOG = os.environ.get("VITADOCK_UPDATE_LOG", "/var/log/vitadock-update.log")
 UPDATED_MARKER = os.environ.get("VITADOCK_UPDATED_MARKER", "/var/lib/vitadock/just-updated")
@@ -263,15 +264,138 @@ def vita_audio_card(vita):
                 cid = f.read().strip()
         except OSError:
             cid = ""
-        return "hw:CARD=%s,DEV=0" % cid if cid else "hw:%s,0" % n
+        return "plughw:CARD=%s,DEV=0" % cid if cid else "plughw:%s,0" % n
     return None
 
 
-def hdmi_pcm(cfg, disp):
-    if cfg.get("AUDIO_PCM", "auto") not in ("", "auto"):
-        return cfg["AUDIO_PCM"]
+AUDIO_OUT_FILE = UPDATE_DIR + "/audio-out"
+
+
+def playback_cards():
+    out = []
+    for d in glob.glob(PROC_ASOUND + "/card*"):
+        name = os.path.basename(d)
+        if not re.match(r"^card\d+$", name) or not glob.glob(d + "/pcm*p"):
+            continue
+        try:
+            with open(d + "/id") as f:
+                cid = f.read().strip()
+        except OSError:
+            continue
+        if cid:
+            out.append((int(name[4:]), cid))
+    return sorted(out)
+
+
+def pcm_candidates(cfg, disp):
+    cands = []
+    manual = cfg.get("AUDIO_PCM", "auto")
+    if manual not in ("", "auto"):
+        cands.append(manual)
     m = re.match(r"^HDMI-A-(\d+)$", disp[1] if disp else "")
-    return "hdmi:CARD=vc4hdmi%d,DEV=0" % (int(m.group(1)) - 1) if m else "default"
+    want = "vc4hdmi%d" % (int(m.group(1)) - 1) if m else ""
+    ids = [cid for _, cid in playback_cards()]
+    if want and want not in ids:
+        ids.insert(0, want)
+    ids.sort(key=lambda c: (c != want, not c.startswith("vc4hdmi")))
+    for cid in ids:
+        if cid.startswith("vc4hdmi"):
+            cands += ["hdmi:CARD=%s,DEV=0" % cid, "default:CARD=%s" % cid]
+        else:
+            cands += ["plughw:CARD=%s,DEV=0" % cid, "default:CARD=%s" % cid]
+    cands.append("default")
+    seen = set()
+    return [c for c in cands if not (c in seen or seen.add(c))]
+
+
+def pcm_label(pcm):
+    m = re.search(r"CARD=vc4hdmi(\d+)", pcm)
+    if m:
+        port = "hdmi %d" % (int(m.group(1)) + 1)
+        return port + (" (direct)" if pcm.startswith("hdmi:") else " (default)")
+    if pcm == "default":
+        return "system default"
+    m = re.search(r"CARD=([^,]+)", pcm)
+    return (m.group(1) if m else pcm)[:22]
+
+
+def _short_err(text):
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    err = lines[-1]
+    err = re.sub(r"^(aplay|alsaloop|ALSA lib)[^:]*:\s*", "", err)
+    err = re.sub(r"^\S+\.c:\d+:\(\S+\)\s*", "", err)
+    err = re.sub(r"^\w+:\d+:\s*", "", err)
+    return err[:90]
+
+
+def probe_pcm(pcm, sound="silence", timeout=4):
+    path = sound_path(sound)
+    if not path:
+        return False, "couldn't make the test sound"
+    try:
+        r = subprocess.run(["aplay", "-q", "-D", pcm, path], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           timeout=timeout, universal_newlines=True, errors="replace")
+    except subprocess.TimeoutExpired:
+        return False, "it hung (the output may be busy)"
+    except OSError as e:
+        return False, str(e)
+    if r.returncode == 0:
+        return True, ""
+    return False, _short_err(r.stderr) or "aplay failed (exit %d)" % r.returncode
+
+
+_AUDIO_OUT = {}
+
+
+def forget_audio_out():
+    _AUDIO_OUT.clear()
+
+
+def audio_out(cfg, disp, refresh=False):
+    key = (cfg.get("AUDIO_PCM", "auto"), disp[1] if disp else "")
+    if not refresh and key in _AUDIO_OUT:
+        return _AUDIO_OUT[key]
+    cands = pcm_candidates(cfg, disp)
+    pick = cands[0]
+    if shutil.which("aplay"):
+        for pcm in cands:
+            ok, err = probe_pcm(pcm)
+            if ok:
+                pick = pcm
+                break
+            log("sound output %s didn't work: %s" % (pcm, err))
+        else:
+            log("no sound output worked, trying %s anyway" % pick)
+    log("sound goes to %s" % pick)
+    _AUDIO_OUT[key] = pick
+    try:
+        os.makedirs(UPDATE_DIR, exist_ok=True)
+        with open(AUDIO_OUT_FILE, "w") as f:
+            f.write(pick + "\n")
+    except OSError:
+        pass
+    return pick
+
+
+def spawn_logged(cmd, tag, on_fail=None):
+    proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE, universal_newlines=True, errors="replace")
+
+    def pump():
+        for line in proc.stderr:
+            line = line.strip()
+            if line:
+                log("%s: %s" % (tag, line))
+        rc = proc.wait()
+        if rc > 0:
+            log("%s stopped with exit %d" % (tag, rc))
+            if on_fail:
+                on_fail(rc)
+    threading.Thread(target=pump, daemon=True).start()
+    return proc
 
 
 def audio_command(capture, playback):
@@ -828,6 +952,9 @@ def _write_tone(path, notes, rate=48000):
 SOUNDS = {
     "boot": [(659.3, 0.09, 0.8), (830.6, 0.09, 0.8), (987.8, 0.09, 0.8), (1318.5, 0.42, 0.9)],
     "connect": [(987.8, 0.06, 0.8), (1318.5, 0.16, 0.9)],
+    "test": [(523.3, 0.14, 0.8), (659.3, 0.14, 0.8), (784.0, 0.14, 0.8), (1046.5, 0.3, 0.9),
+             (0, 0.12, 0), (784.0, 0.14, 0.8), (1046.5, 0.5, 0.9)],
+    "silence": [(0, 0.08, 0)],
 }
 
 
@@ -851,8 +978,8 @@ def play_sound(name, cfg, disp, wait=False):
     if not path:
         return
     try:
-        proc = subprocess.Popen(["aplay", "-q", "-D", hdmi_pcm(cfg, disp), path],
-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        proc = spawn_logged(["aplay", "-q", "-D", audio_out(cfg, disp), path], "aplay",
+                            on_fail=lambda rc: forget_audio_out())
         if wait:
             proc.wait(3)
     except (OSError, subprocess.TimeoutExpired):
@@ -1187,6 +1314,7 @@ def build_menu(st):
         if cfg["BT_AUDIO"] == "yes":
             items.append(("pair", "pair the vita over bluetooth", ""))
         items.append(c("sounds", "dock sounds"))
+        items.append(("soundtest", "test the sound", ""))
     elif m == "power":
         items = [c("boost", "usb power for the vita"),
                  ("chargehelp", "charging while you play", ""),
@@ -1240,6 +1368,8 @@ def item_help(st, key):
         "chargehelp": "what you need to do on the vita so it charges while you play.",
         "reboot": "turns the pi off and on again.",
         "shutdown": "wait for the green light to stop flashing before you pull the power.",
+        "soundtest": "no sound? this plays a tune on each of the pi's sound outputs so you can find "
+                     "the one your tv hears, and shows what went wrong if one doesn't work.",
         "info": "the tv mode, the vita's video and sound devices, the player in use and the pi's ip address.",
         "update": "checks github for a new version. the pi needs to be online. your settings are kept.",
         "restartdock": "restarts just the dock software, handy if something's got stuck.",
@@ -1504,7 +1634,9 @@ def draw_info(g, st):
         ("player", option_label(PLAYERS, player_name(st.cfg)) if player_name(st.cfg) != "compatible"
          and gst_available() else "compatible (mpv)"),
         ("picture", picture_desc(st)),
-        ("sound", "usb (%s)" % st.vita_audio if st.vita_audio and usb_audio_wanted(st.cfg) else audio_desc(st)),
+        ("sound from", "usb (%s)" % st.vita_audio if st.vita_audio and usb_audio_wanted(st.cfg)
+         else "the vita isn't sending usb sound" if st.vita else audio_desc(st)),
+        ("sound to", pcm_label(audio_out(st.cfg, st.disp))),
         ("settings file", CONF),
     ]
     for k, v in rows:
@@ -1519,6 +1651,38 @@ def draw_info(g, st):
                  "or just unplug the vita."):
         g.text(x + 24 * u, y, line, "body", DIM)
         y += lh
+
+
+def draw_soundtest(g, st):
+    draw_chrome(g, st, "up/down move   enter play   esc back")
+    t = st.stest
+    rows = []
+    for pcm in t["pcms"]:
+        res = t["res"].get(pcm, "")
+        value = "in use" if pcm == t["saved"] else ""
+        if res == "ok":
+            value = "played" + (", in use" if value else "")
+        elif res:
+            value = "didn't work"
+        rows.append((pcm_label(pcm), value, BAD if res not in ("", "ok") else FG,
+                     "(*) " if pcm == t["saved"] else "( ) "))
+    rows.append(("let the dock pick (automatic)", "in use" if t["saved"] == "auto" else "", FG,
+                 "(*) " if t["saved"] == "auto" else "( ) "))
+    sel = t["sel"]
+    if sel < len(t["pcms"]):
+        pcm = t["pcms"][sel]
+        res = t["res"].get(pcm, "")
+        if res == "ok":
+            help_text = ("did you hear the tune? press enter again to keep using %s. "
+                         "if not, try the next one." % pcm_label(pcm))
+        elif res:
+            help_text = "%s: %s" % (pcm, res)
+        else:
+            help_text = "press enter to play a tune on %s (alsa name %s)." % (pcm_label(pcm), pcm)
+    else:
+        help_text = "tries the outputs itself and uses the first one that works. this is the default."
+    note = "tv on mute, or the volume down? the tune plays at a normal level." if not t["res"] else ""
+    draw_list(g, st, rows, sel, "settings / sound / test the sound", help_text, note)
 
 
 def build_wifi(st):
@@ -1712,7 +1876,8 @@ def draw(g, st):
     {"home": draw_home, "menu": draw_menu, "confirm": draw_confirm, "msg": draw_message,
      "busy": draw_message, "pair": draw_pair, "info": draw_info,
      "wifi": draw_wifi, "text": draw_text, "update": draw_update,
-     "choose": draw_choose, "help": draw_help, "intro": draw_intro_screen}[st.screen](g, st)
+     "choose": draw_choose, "help": draw_help, "intro": draw_intro_screen,
+     "soundtest": draw_soundtest}[st.screen](g, st)
 
 
 class PygameInput:
@@ -1767,7 +1932,10 @@ class PygameInput:
         got_text = any(e.type == pg.TEXTINPUT for e in events)
         for e in events:
             t = e.type
-            if t == pg.TEXTINPUT:
+            if t == pg.KEYDOWN and pg.K_F1 <= e.key <= pg.K_F12 \
+                    and e.mod & pg.KMOD_CTRL and e.mod & pg.KMOD_ALT:
+                out.append(("VT", e.key - pg.K_F1 + 1))
+            elif t == pg.TEXTINPUT:
                 if self.text_mode:
                     out.append(("TEXT", e.text))
             elif t == pg.KEYDOWN and self.text_mode:
@@ -1965,6 +2133,14 @@ class HotkeyWatcher:
                 pass
 
 
+def active_vt():
+    try:
+        with open(VT_ACTIVE) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 class Dock:
     def __init__(self):
         self.st = State()
@@ -1999,11 +2175,11 @@ class Dock:
             st.vita_audio = vita_audio_card(st.vita)
         if not st.vita_audio or not shutil.which("alsaloop"):
             return None
-        out = hdmi_pcm(st.cfg, st.disp)
+        out = audio_out(st.cfg, st.disp)
         log("usb audio %s -> %s" % (st.vita_audio, out))
         try:
-            return subprocess.Popen(audio_command(st.vita_audio, out),
-                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+            return spawn_logged(audio_command(st.vita_audio, out), "alsaloop",
+                                on_fail=lambda rc: forget_audio_out())
         except OSError as e:
             log("couldn't start usb audio: %s" % e)
             return None
@@ -2268,6 +2444,27 @@ class Dock:
             self.message("that didn't work", str(e)[:70], "", "vitadock's log has more: journalctl -u vitadock")
             return False
 
+    def soundtest_ok(self):
+        st = self.st
+        t = st.stest
+        if t["sel"] >= len(t["pcms"]):
+            set_config("AUDIO_PCM", "auto")
+            t["saved"] = "auto"
+        else:
+            pcm = t["pcms"][t["sel"]]
+            if t["res"].get(pcm) == "ok" and t["saved"] != pcm:
+                set_config("AUDIO_PCM", pcm)
+                t["saved"] = pcm
+            else:
+                st.screen, st.busy = "busy", "playing a tune on " + pcm_label(pcm)
+                self.redraw(force=True)
+                ok, err = probe_pcm(pcm, "test", timeout=8)
+                log("sound test %s: %s" % (pcm, "played" if ok else err))
+                t["res"][pcm] = "ok" if ok else (err or "didn't work")
+                st.screen = "soundtest"
+        st.cfg = load_config()
+        forget_audio_out()
+
     def set_choice(self, key, value):
         st = self.st
         cfg = st.cfg
@@ -2341,6 +2538,12 @@ class Dock:
         elif key == "info":
             st.ips = ip_addresses()
             st.screen = "info"
+        elif key == "soundtest":
+            st.stest = {"pcms": pcm_candidates(dict(st.cfg, AUDIO_PCM="auto"), st.disp),
+                        "res": {}, "sel": 0, "saved": st.cfg.get("AUDIO_PCM", "auto") or "auto"}
+            if st.stest["saved"] != "auto" and st.stest["saved"] not in st.stest["pcms"]:
+                st.stest["pcms"].insert(0, st.stest["saved"])
+            st.screen = "soundtest"
         elif key == "help":
             st.screen = "help"
         elif key == "wifi":
@@ -2507,6 +2710,8 @@ class Dock:
                     st.wsel = i
                 elif st.screen == "confirm":
                     st.confirm["sel"] = i
+                elif st.screen == "soundtest":
+                    st.stest["sel"] = i
                 elif st.screen == "text":
                     st.kb_r, st.kb_c = i
             return
@@ -2524,6 +2729,9 @@ class Dock:
             elif st.screen == "confirm" and i is not None:
                 st.confirm["sel"] = i
                 kind = "OK"
+            elif st.screen == "soundtest" and i is not None:
+                st.stest["sel"] = i
+                kind = "OK"
             elif st.screen == "text" and i is not None:
                 st.kb_r, st.kb_c = i
                 self.kb_press()
@@ -2532,6 +2740,9 @@ class Dock:
                 kind = "OK"
             else:
                 return
+        if kind == "VT":
+            self.switch_vt(action[1])
+            return
         if st.screen == "text":
             self.handle_text(action)
             return
@@ -2597,6 +2808,16 @@ class Dock:
                 c["yes"]()
             elif kind in ("OK", "BACK"):
                 self.go_back(back)
+        elif st.screen == "soundtest":
+            n = len(st.stest["pcms"]) + 1
+            if kind == "UP":
+                st.stest["sel"] = (st.stest["sel"] - 1) % n
+            elif kind == "DOWN":
+                st.stest["sel"] = (st.stest["sel"] + 1) % n
+            elif kind == "OK":
+                self.soundtest_ok()
+            elif kind == "BACK":
+                self.show_menu()
         elif st.screen == "msg":
             if kind in ("OK", "BACK"):
                 self.go_back((st.msg or {}).get("back", "menu"))
@@ -2612,6 +2833,30 @@ class Dock:
                     st.pairing.stop()
                 st.pairing = None
                 self.show_menu()
+
+    def switch_vt(self, n):
+        if n == 1:
+            return
+        log("switching to console tty%d (alt+f1 comes back)" % n)
+        self.screen.close()
+        try:
+            import fcntl
+            fd = os.open("/dev/tty0", os.O_RDWR)
+            try:
+                fcntl.ioctl(fd, 0x5606, n)
+            finally:
+                os.close(fd)
+        except OSError as e:
+            log("couldn't switch console: %s" % e)
+            self.screen.open(self.st.disp)
+            return
+        time.sleep(1)
+        while active_vt() not in ("tty1", ""):
+            time.sleep(0.5)
+        log("back on tty1")
+        time.sleep(0.3)
+        self.screen.open(self.st.disp)
+        self.dirty = True
 
     def hit(self, pos):
         x, y = pos
@@ -2744,8 +2989,11 @@ def cmd_status():
                              if plan["nearest"] else "smooth, fit to %dx%d" % (ow, oh)))
         print("1080p  up to %dhz" % best_1080p_refresh(disp))
     va = vita_audio_card(vita)
-    print("sound  %s" % ("usb from the vita, %s -> %s" % (va, hdmi_pcm(cfg, disp)) if va and usb_audio_wanted(cfg)
+    print("sound  %s" % ("usb from the vita, %s" % va if va and usb_audio_wanted(cfg)
                          else "bluetooth" if cfg["BT_AUDIO"] == "yes" else "no usb audio from the vita"))
+    for pcm in pcm_candidates(cfg, disp):
+        ok, err = probe_pcm(pcm)
+        print("  out  %-28s %s" % (pcm, "ok" if ok else err))
 
 
 PLYMOUTH_SCRIPT = """\
@@ -2853,6 +3101,13 @@ def cmd_screenshot(outdir):
     shot("help")
     st.screen = "info"
     shot("info")
+    st.screen = "soundtest"
+    pcms = pcm_candidates(dict(st.cfg, AUDIO_PCM="auto"), st.disp)
+    st.stest = {"pcms": pcms, "res": {}, "sel": 0, "saved": "auto"}
+    shot("soundtest")
+    st.stest["res"] = {pcms[0]: "audio open error: Device or resource busy", pcms[1]: "ok"}
+    st.stest["sel"] = 1
+    shot("soundtest-played")
     st.screen = "confirm"
     st.confirm = {"lines": ["uninstall vitadock++?", "", "this removes it and its settings, then restarts the pi",
                             "into plain pi os. you'd need to reinstall to get it back."], "yes": None, "sel": 0}
@@ -2893,6 +3148,14 @@ def main(argv):
         cmd_plymouth_theme(argv[2])
     elif cmd == "screenshot" and len(argv) == 3:
         cmd_screenshot(argv[2])
+    elif cmd == "audio-out":
+        try:
+            with open(AUDIO_OUT_FILE) as f:
+                pick = f.read().strip()
+        except OSError:
+            pick = ""
+        cfg = load_config()
+        print(pick or audio_out(cfg, find_display(cfg)))
     elif cmd in ("version", "--version"):
         print(version())
     else:

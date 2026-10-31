@@ -140,7 +140,7 @@ On 1.1.0 to 1.3.0 the update option was broken. It works now, but the old screen
 
 ## Troubleshooting
 
-*system > what's plugged in* shows what the Pi can see. If you can get to a terminal (Ctrl+Alt+F2 with a keyboard), `vitadock status` and `journalctl -u vitadock -n 50` help too.
+*system > what's plugged in* shows what the Pi can see. For a terminal, press Ctrl+Alt+F2 on a keyboard while the menu or waiting screen is up and log in. Alt+F1 takes you back to the dock. From there, `vitadock status` and `journalctl -u vitadock -n 50` help too.
 
 <details>
 <summary>black screen or "no signal"</summary>
@@ -158,6 +158,14 @@ Try another USB cable, loads only charge. Reboot the Vita. Lots of Vita plugins,
 <summary>"vita found but no picture"</summary>
 
 Usually the video format. Edit `/etc/vitadock.conf`, change `VITA_PIXFMT=auto` to `VITA_PIXFMT=yuyv422` and reboot. If it started after you picked super fast or fast, the dock will drop back to compatible by itself after a couple of tries.
+</details>
+
+<details>
+<summary>no sound, not even the dock's chime</summary>
+
+Go to *sound > test the sound*. It lists every sound output the Pi has. Pick one and it plays a little tune. If it doesn't work, it says why. When you hear the tune, press enter again and the dock keeps using that one. Check the TV isn't on mute and that *dock sounds* is on.
+
+If the chime works but there's no game sound, *what's plugged in* tells you whether the Vita is sending sound over USB at all. Only vitastream and VitaUSBStream do. udcd_uvc is picture only.
 </details>
 
 <details>
