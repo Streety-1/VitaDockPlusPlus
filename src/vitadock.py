@@ -398,9 +398,27 @@ def spawn_logged(cmd, tag, on_fail=None):
     return proc
 
 
+_HAS_SRC = None
+
+
+def alsaloop_resampler():
+    global _HAS_SRC
+    if _HAS_SRC is None:
+        try:
+            out = subprocess.run(["ldd", shutil.which("alsaloop") or "alsaloop"], stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, universal_newlines=True, timeout=5).stdout
+            _HAS_SRC = "libsamplerate" in out
+        except (OSError, subprocess.TimeoutExpired):
+            _HAS_SRC = False
+    return _HAS_SRC
+
+
 def audio_command(capture, playback):
-    return ["alsaloop", "-C", capture, "-P", playback, "-c", "2", "-r", "48000",
-            "-f", "S16_LE", "-t", "30000"]
+    cmd = ["alsaloop", "-C", capture, "-P", playback, "-c", "2", "-r", "48000",
+           "-f", "S16_LE", "-t", "50000"]
+    if alsaloop_resampler():
+        cmd += ["-S", "4", "-A", "1"]
+    return cmd
 
 
 def usb_audio_wanted(cfg):
