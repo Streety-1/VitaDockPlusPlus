@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: build vitadock.skprx
+      - name: build vitadock_psfix.skprx
         run: make -C vita-plugin
       - name: make the usb zip
         run: |
@@ -36,10 +36,10 @@ jobs:
           rm -f out/VitaDock++/vita-plugin/*.o out/VitaDock++/vita-plugin/*.elf \
                 out/VitaDock++/vita-plugin/*.velf out/VitaDock++/vita-plugin/*.skprx
           cp ".github/release/INSTALL FROM USB.txt" out/VitaDock++/
-          cp vita-plugin/vitadock.skprx out/
+          cp vita-plugin/vitadock_psfix.skprx out/
           (cd out && zip -qr "VitaDock++-$ver-usb.zip" VitaDock++)
       - name: attach to the release
         run: |
           ver=$(cat VERSION)
           for i in $(seq 30); do gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 && break; sleep 10; done
-          gh release upload "$TAG" out/vitadock.skprx "out/VitaDock++-$ver-usb.zip" --clobber -R "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" out/vitadock_psfix.skprx "out/VitaDock++-$ver-usb.zip" --clobber -R "$GITHUB_REPOSITORY"

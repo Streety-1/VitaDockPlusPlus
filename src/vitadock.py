@@ -1605,7 +1605,7 @@ HELP_TEXT = [
     ]),
     ("vita plugins", [
         "vitastream          picture and sound over usb (lcd_off / oled_off)",
-        "vitadock.skprx      keeps the vita's screen off while docked",
+        "vitadock_psfix      only if the vita's screen comes back on while docked",
         "both go in ur0:tai/config.txt under *KERNEL, vitastream first.",
     ]),
     ("charging", [
@@ -2629,9 +2629,9 @@ class Dock:
             psu = psu_max_current()
             self.message("charging while you play",
                          "1. on the vita: settings > system > usb power supply, turn it on.",
-                         "2. use vitastream's screen-off version (lcd_off or oled_off)",
-                         "   with vitadock.skprx. the screen is the biggest drain, so with",
-                         "   it off more power goes to the battery.",
+                         "2. use vitastream's screen-off version (lcd_off or oled_off).",
+                         "   the screen is the biggest drain, so with it off more power",
+                         "   goes to the battery.",
                          "3. a plain pc-style usb port only gives the vita about 500mA, so it",
                          "   charges slowly while you play. turning usb power boost on helps",
                          "   if you have the official 5A supply%s." % (

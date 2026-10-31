@@ -30,27 +30,32 @@ You put a plugin on the Vita that makes it act like a USB webcam and sound card,
 
 ## Setting up the Vita
 
-The Vita needs two plugins:
+The Vita needs [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120. It makes the Vita show up as a USB webcam and sound card, so the picture and the sound both go down the one cable. Get `vitastream_lcd_off.skprx` if you've got a slim, or `vitastream_oled_off.skprx` for the original. These switch the Vita's screen off while it's docked.
 
-- [vitastream](https://github.com/devnoname120/vitastream/releases) by devnoname120 makes the Vita show up as a USB webcam and sound card, so the picture and the sound both go down the one cable.
-- **vitadock.skprx**, VitaDock++'s own plugin. vitastream switches the Vita's screen off when it connects, but after a few minutes the Vita's power saving changes the brightness and the screen comes back on. This keeps it off while the Vita's on the dock and puts it back the moment you unplug. The rest of the time it does nothing.
-
-Get `vitastream_lcd_off.skprx` if you've got a slim, or `vitastream_oled_off.skprx` for the original, from vitastream's releases. Get `vitadock.skprx` from the [latest VitaDock++ release](https://github.com/Streety-1/VitaDockPlusPlus/releases/latest).
-
-1. Copy both onto your memory card or SD2Vita. VitaShell's USB mode only shows that, not the Vita's internal storage.
-2. In VitaShell on the Vita, copy them from there into `ur0:tai/`.
-3. Open `ur0:tai/config.txt` in VitaShell and add them under `*KERNEL`, vitastream first:
+1. Copy it onto your memory card or SD2Vita. VitaShell's USB mode only shows that, not the Vita's internal storage.
+2. In VitaShell on the Vita, copy it from there into `ur0:tai/`.
+3. Open `ur0:tai/config.txt` in VitaShell and add it under `*KERNEL`:
    ```
    *KERNEL
    ur0:tai/vitastream_lcd_off.skprx
-   ur0:tai/vitadock.skprx
    ```
    If you had udcd_uvc or another video plugin in there, take its line out. Only one video plugin at a time.
 4. Reboot the Vita.
 
 If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
 
-The source for vitadock.skprx is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes. It's new, so if the Vita misbehaves, take its line out of `config.txt` and [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues). It keeps a short log at `ur0:data/vitadock.txt` (you can open it in VitaShell), which is the most useful thing to attach.
+### Screen coming back on while docked?
+
+On some Vitas, a few minutes after docking the power saving changes the brightness and the screen comes back on, even though it's still plugged into the dock. If that happens to you, add **vitadock_psfix.skprx** (power saving fix) from the [latest release](https://github.com/Streety-1/VitaDockPlusPlus/releases/latest). That's all it does: it keeps the screen off while vitastream has it docked, and gives it back when you unplug. If your screen stays off fine, you don't need it.
+
+Put it in `ur0:tai/` and add it under vitastream:
+```
+*KERNEL
+ur0:tai/vitastream_lcd_off.skprx
+ur0:tai/vitadock_psfix.skprx
+```
+
+The source is in [vita-plugin](vita-plugin). If the Vita misbehaves with it, take its line out and [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues) with the log from `ur0:data/vitadock_psfix.txt` (you can open it in VitaShell).
 
 ## Installing on the Pi
 
@@ -115,7 +120,7 @@ The Vita only charges from the dock if you turn on **Settings > System > USB Pow
 
 Even then it's slow. The Pi's USB ports are the same kind as a computer's, so the Vita only takes about 500mA from them. While you're playing that roughly breaks even. Two things help:
 
-- Use the screen-off version of vitastream (`_lcd_off` or `_oled_off`) with vitadock.skprx. The Vita's screen is the biggest drain, so with it off more power goes to the battery.
+- Use the screen-off version of vitastream (`_lcd_off` or `_oled_off`). The Vita's screen is the biggest drain, so with it off more power goes to the battery.
 - If you've got the official 27W (5A) power supply, turn on **usb power for the vita** under *power and charging*. The Pi 5 only gives its USB ports 600mA between them unless it knows it's on a 5A supply, and this lifts that to 1.6A. Don't turn it on with a weaker supply.
 
 ## Controllers
@@ -202,7 +207,7 @@ If none of that helps, [open an issue](https://github.com/Streety-1/VitaDockPlus
 - [SilentNightx](https://github.com/SilentNightx) and the original VitaDock team (Bu, ZoidBerg, Si, David-OX and Crash) for [VitaDock+](https://github.com/SilentNightx/VitaDockPlus) and the original VitaDock.
 - [devnoname120](https://github.com/devnoname120) for [vitastream](https://github.com/devnoname120/vitastream), which the dock uses for picture and sound.
 - [BMK-Studio](https://github.com/BMK-Studio) for [VitaUSBStream](https://github.com/BMK-Studio/VitaUSBStream), another take on picture and sound over USB that helped show what was possible.
-- [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku, and [Yifan Lu](https://github.com/yifanlu) for [taiHEN](https://github.com/yifanlu/taiHEN), which the screen plugin uses to do its thing.
+- [TheOfficialFloW](https://github.com/TheOfficialFloW), Team Molecule and everyone behind HENkaku, and [Yifan Lu](https://github.com/yifanlu) for [taiHEN](https://github.com/yifanlu/taiHEN), which vitadock_psfix uses to do its thing.
 - The [VitaSDK](https://vitasdk.org) team for the toolchain and the [vita-headers](https://github.com/vitasdk/vita-headers) docs.
 - [GStreamer](https://gstreamer.freedesktop.org/), [mpv](https://mpv.io/), [pygame](https://www.pygame.org/), [Plymouth](https://www.freedesktop.org/wiki/Software/Plymouth/) and [bluez-alsa](https://github.com/arkq/bluez-alsa), which do the heavy lifting on the Pi.
 

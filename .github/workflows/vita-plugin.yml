@@ -16,17 +16,17 @@ jobs:
     container: vitasdk/vitasdk:latest
     steps:
       - uses: actions/checkout@v4
-      - name: build vitadock.skprx
+      - name: build vitadock_psfix.skprx
         run: make -C vita-plugin
       - uses: actions/upload-artifact@v4
         with:
-          name: vitadock-plugin
-          path: vita-plugin/vitadock.skprx
+          name: vitadock_psfix
+          path: vita-plugin/vitadock_psfix.skprx
       - name: keep the built plugin in the repo
         if: github.ref == 'refs/heads/main'
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git config user.name "Streety-1"
           git config user.email "Streety-1@users.noreply.github.com"
-          git add -f vita-plugin/vitadock.skprx
-          git diff --cached --quiet || { git commit -m "build vitadock.skprx" && git push; }
+          git add -f vita-plugin/vitadock_psfix.skprx
+          git diff --cached --quiet || { git commit -m "build vitadock_psfix.skprx" && git push; }

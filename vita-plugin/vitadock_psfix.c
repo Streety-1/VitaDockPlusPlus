@@ -8,7 +8,7 @@ int module_get_export_func(SceUID pid, const char *modname, uint32_t libnid,
                            uint32_t funcnid, uintptr_t *func);
 
 #define VERSION "1.1"
-#define LOG_PATH "ur0:data/vitadock.txt"
+#define LOG_PATH "ur0:data/vitadock_psfix.txt"
 
 struct panel {
 	const char *module;
@@ -232,7 +232,7 @@ int module_start(SceSize args, void *argp)
 	(void)args;
 	(void)argp;
 
-	log_add("vitadock.skprx " VERSION "\n");
+	log_add("vitadock_psfix " VERSION "\n");
 	if (find_panel() < 0) {
 		log_add("couldn't find the screen driver, not doing anything\n");
 		log_flush(1);
@@ -266,7 +266,7 @@ int module_start(SceSize args, void *argp)
 	log_flush(1);
 
 	running = 1;
-	watcher = ksceKernelCreateThread("vitadock_screen", watch, 0x3C, 0x2000, 0, 0, NULL);
+	watcher = ksceKernelCreateThread("vitadock_psfix", watch, 0x3C, 0x2000, 0, 0, NULL);
 	if (watcher >= 0)
 		ksceKernelStartThread(watcher, 0, NULL);
 
