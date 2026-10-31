@@ -641,10 +641,10 @@ class Pairing:
         if shutil.which("bt-agent"):
             self.agent = subprocess.Popen(["bt-agent", "-c", "NoInputNoOutput"],
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.started = time.time()
+        self.started = time.monotonic()
 
     def left(self):
-        return max(0, int(self.SECONDS - (time.time() - self.started)))
+        return max(0, int(self.SECONDS - (time.monotonic() - self.started)))
 
     def poll(self):
         new = {mac: name for mac, name in bt_paired().items() if mac not in self.before}
@@ -916,9 +916,9 @@ class FbSplash:
         def loop():
             try:
                 frames = self.frames(st, w, h, bpp, stride)
-                end = time.time() + seconds
+                end = time.monotonic() + seconds
                 i = 0
-                while not self.stop_ev.is_set() and time.time() < end:
+                while not self.stop_ev.is_set() and time.monotonic() < end:
                     os.pwrite(fb, frames[i % (len(frames) - 1)], 0)
                     i += 1
                     self.stop_ev.wait(0.18)
@@ -1331,7 +1331,7 @@ def draw_home(g, st):
     dotted(g, tx, y + lh * 3.9, "audio", audio_desc(st), width)
     if st.error:
         g.text(tx, y + lh * 5.6, st.error, "small", BAD)
-    elif st.notice and time.time() < st.notice_until:
+    elif st.notice and time.monotonic() < st.notice_until:
         g.text(tx, y + lh * 5.6, st.notice, "small", GOOD)
 
 
@@ -1680,16 +1680,20 @@ def draw_update(g, st):
         g.rect(x + 5 * u, y + 5 * u, fill, bh - 10 * u, BAD if state == "error" else ACCENT)
     y += bh + 16 * u
     g.text(x, y, "%d%%" % pct, "body", FG)
-    secs = int(time.time() - up.get("started", time.time()))
+    secs = int(time.monotonic() - up.get("started", time.monotonic()))
     g.text(x + bw, y, "%d:%02d" % (secs // 60, secs % 60), "body", DIM, "r")
     y += g.line_h("body") * 1.5
     msg = up.get("msg", "")
     g.text(x, y, msg[:80], "body", BAD if state == "error" else DIM)
     y += g.line_h("body") * 1.8
     if state == "running":
-        for line in ("the first update after a new release can take a few minutes,",
-                     "it has to download new packages. the dock restarts itself at the end."):
-            g.text(x, y, line, "small", DIM)
+        lines = ["the first update after a new release can take a few minutes,",
+                 "it has to download new packages. the dock restarts itself at the end."]
+        if up.get("slow"):
+            lines = ["still going. this step can sit for a few minutes without the bar",
+                     "moving, that's normal. leave it be and don't turn the pi off."]
+        for line in lines:
+            g.text(x, y, line, "small", ACCENT if up.get("slow") else DIM)
             y += g.line_h("small") * 1.3
     elif state == "error":
         for line in up.get("log", []):
@@ -1921,8 +1925,8 @@ class HotkeyWatcher:
         held = set()
         last_scan = 0
         while not stop.is_set():
-            if time.time() - last_scan > 2:
-                last_scan = time.time()
+            if time.monotonic() - last_scan > 2:
+                last_scan = time.monotonic()
                 for path in self.ev.list_devices():
                     if path in devices:
                         continue
@@ -2037,12 +2041,12 @@ class Dock:
             st.disp[1], st.out_mode,
             "pixel perfect %dx" % plan["k"] if plan.get("nearest") else "smooth"))
         self.screen.close()
-        if not self.played_once or time.time() - self.last_connect_sound > 30:
+        if not self.played_once or time.monotonic() - self.last_connect_sound > 30:
             play_sound("connect", st.cfg, st.disp, wait=True)
-            self.last_connect_sound = time.time()
+            self.last_connect_sound = time.monotonic()
         self.played_once = True
         self.fb.start(st)
-        started = time.time()
+        started = time.monotonic()
         proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL)
         audio = self.start_audio()
         stop, hit = threading.Event(), threading.Event()
@@ -2061,7 +2065,7 @@ class Dock:
         t.join(2)
         self.stop_audio(audio)
         self.fb.stop()
-        ran = time.time() - started
+        ran = time.monotonic() - started
         self.last_note = ""
         if hit.is_set():
             self.fails = 0
@@ -2075,14 +2079,14 @@ class Dock:
                     self.gst_broken = True
                     log("fast player keeps failing, falling back to mpv")
                     st.error = "fast player didn't work here, using the compatible one."
-                    self.retry_at = time.time() + 1
+                    self.retry_at = time.monotonic() + 1
                 else:
                     st.error = "starting the fast player again..."
-                    self.retry_at = time.time() + 2
+                    self.retry_at = time.monotonic() + 2
             else:
                 self.fails += 1
                 st.error = "vita found but no picture (try %d). trying again..." % self.fails
-                self.retry_at = time.time() + (3 if self.fails < 3 else 10)
+                self.retry_at = time.monotonic() + (3 if self.fails < 3 else 10)
         else:
             if player == "fast":
                 self.gst_fails = 0
@@ -2434,7 +2438,7 @@ class Dock:
         if r.returncode != 0:
             self.message("couldn't start the update", (r.stderr or r.stdout).strip()[:70])
             return
-        now = time.time()
+        now = time.monotonic()
         st.upd = {"to": latest, "pct": 1, "msg": "starting the updater", "state": "running",
                   "started": now, "changed": now, "polled": 0, "checked": now, "log": []}
         st.screen = "update"
@@ -2445,7 +2449,7 @@ class Dock:
         up = st.upd
         if not up or up["state"] != "running":
             return
-        now = time.time()
+        now = time.monotonic()
         if now - up["polled"] < 0.5:
             return
         up["polled"] = now
@@ -2457,7 +2461,7 @@ class Dock:
             elif kind == "done":
                 up.update(state="done", pct=100, msg=msg or "done")
             elif kind.isdigit() and (int(kind), msg) != (up["pct"], up["msg"]):
-                up.update(pct=int(kind), msg=msg, changed=now)
+                up.update(pct=int(kind), msg=msg, changed=now, slow=False)
         self.dirty = True
         if up["state"] != "running":
             log("update %s: %s" % (up["state"], up["msg"]))
@@ -2473,12 +2477,14 @@ class Dock:
                           msg="couldn't download the installer. is the pi online?" if up["pct"] <= 1
                           else "the updater stopped before it finished.")
                 log("update unit ended early (%s)" % state)
-        if now - up["changed"] > 20 * 60:
+        if now - up["changed"] > 3 * 60:
+            up["slow"] = True
+        if now - up["changed"] > 90 * 60:
             up.update(state="error", log=tail_update_log(),
-                      msg="nothing's happened for 20 minutes, so it looks stuck.")
+                      msg="nothing's moved for an hour and a half, so it looks stuck.")
 
     def uninstall(self):
-        r = sh(["systemd-run", "--collect", "--unit=vitadock-uninstall-%d" % int(time.time()),
+        r = sh(["systemd-run", "--collect", "--unit=vitadock-uninstall-%d" % int(time.monotonic()),
                 "/bin/bash", SHARE + "/uninstall.sh", "--yes", "--purge", "--reboot"])
         if r.returncode != 0:
             self.message("couldn't start the uninstall", (r.stderr or r.stdout).strip()[:70])
@@ -2618,11 +2624,11 @@ class Dock:
     def redraw(self, force=False):
         if not self.screen.is_open():
             return
-        if force or self.dirty or time.time() - self.last_draw > 0.5:
+        if force or self.dirty or time.monotonic() - self.last_draw > 0.5:
             draw(self.screen.gfx, self.st)
             self.screen.present()
             self.dirty = False
-            self.last_draw = time.time()
+            self.last_draw = time.monotonic()
 
     def intro(self):
         st = self.st
@@ -2630,15 +2636,15 @@ class Dock:
         prev = st.screen
         st.screen, self.intro_skip = "intro", False
         play_sound("boot", st.cfg, st.disp)
-        start = time.time()
+        start = time.monotonic()
         length = 2.2
         while not self.intro_skip:
-            st.intro_t = min(1.0, (time.time() - start) / length)
+            st.intro_t = min(1.0, (time.monotonic() - start) / length)
             draw(self.screen.gfx, st)
             self.screen.present()
             for action in self.screen.input.actions():
                 self.handle(action)
-            if st.intro_t >= 1.0 and time.time() - start > length + 0.6:
+            if st.intro_t >= 1.0 and time.monotonic() - start > length + 0.6:
                 break
             time.sleep(1 / 30.0)
         st.screen = prev if prev != "intro" else "home"
@@ -2650,7 +2656,7 @@ class Dock:
             self.poll_update()
         p = st.pairing
         if st.screen == "pair" and p and not p.result:
-            if int(time.time()) % 2 == 0:
+            if int(time.monotonic()) % 2 == 0:
                 p.poll()
             if p.result or p.left() == 0:
                 p.stop()
@@ -2668,7 +2674,7 @@ class Dock:
             with open(UPDATED_MARKER) as f:
                 newver = f.read().strip()
             os.remove(UPDATED_MARKER)
-            st.notice, st.notice_until = "updated to %s." % (newver or st.ver), time.time() + 180
+            st.notice, st.notice_until = "updated to %s." % (newver or st.ver), time.monotonic() + 180
             log("just updated to %s" % newver)
         except OSError:
             pass
@@ -2687,7 +2693,7 @@ class Dock:
                 continue
             st.out_mode = pick_output_mode(st.cfg, st.disp[2])
 
-            now = time.time()
+            now = time.monotonic()
             if now - self.last_vita_check >= 1:
                 self.last_vita_check = now
                 vita = find_vita()
@@ -2825,7 +2831,7 @@ def cmd_screenshot(outdir):
     draw_connecting(g, st, 2)
     g.img.save(os.path.join(outdir, "connecting.png"))
     st.screen = "home"
-    st.notice, st.notice_until = "updated to %s." % st.ver, time.time() + 60
+    st.notice, st.notice_until = "updated to %s." % st.ver, time.monotonic() + 60
     shot("home")
     st.notice = ""
     st.vita, st.pixfmt, st.vita_audio = "/dev/video0", "nv12", "hw:CARD=vitastream,DEV=0"
@@ -2861,7 +2867,7 @@ def cmd_screenshot(outdir):
     shot("wifi")
     st.screen = "update"
     st.upd = {"to": "1.4.0", "pct": 47, "msg": "installing gstreamer1.0-plugins-bad (arm64)", "state": "running",
-              "started": time.time() - 83, "log": []}
+              "started": time.monotonic() - 83, "log": []}
     shot("update")
     st.screen, st.vita = "home", None
     shot("home-720p", 1280, 720)

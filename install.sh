@@ -196,7 +196,7 @@ apt_install 50 76 gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plug
 progress 76 "installing bluetooth audio bits"
 apt_install 76 81 bluez bluez-alsa-utils bluez-tools \
   || warn "couldn't install the bluetooth audio packages. everything else will still work."
-progress 81 "installing the boot splash"
+progress 81 "installing the boot splash (this one can take a couple of minutes)"
 HAVE_PLYMOUTH=yes
 apt_install 81 85 plymouth || { HAVE_PLYMOUTH=no; warn "couldn't install plymouth, so no boot animation. no big deal."; }
 
@@ -267,7 +267,7 @@ else
 fi
 
 if [ "$HAVE_PLYMOUTH" = yes ] && command -v plymouth-set-default-theme >/dev/null; then
-  progress 96 "setting up the boot animation"
+  progress 96 "setting up the boot animation (rebuilds the boot image, a minute or two)"
   THEME=/usr/share/plymouth/themes/vitadock
   if as_root /usr/bin/python3 "$LIB/vitadock.py" plymouth-theme "$THEME" >/dev/null; then
     if ls "${BOOT_DIR:-/boot/firmware}"/initramfs* >/dev/null 2>&1; then
