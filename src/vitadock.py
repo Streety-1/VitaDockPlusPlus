@@ -379,6 +379,53 @@ def audio_out(cfg, disp, refresh=False):
     return pick
 
 
+def capture_position(pcm):
+    m = re.search(r"CARD=([^,]+)", pcm or "") or re.search(r"hw:(\d+)", pcm or "")
+    if not m:
+        return None, None
+    card = m.group(1)
+    if card.isdigit():
+        card = "card" + card
+    try:
+        with open("%s/%s/pcm0c/sub0/status" % (PROC_ASOUND, card)) as f:
+            text = f.read()
+    except OSError:
+        return None, None
+    st = re.search(r"state:\s*(\w+)", text)
+    ptr = re.search(r"hw_ptr\s*:\s*(\d+)", text)
+    return (st.group(1) if st else text.strip().split()[0] if text.strip() else None,
+            int(ptr.group(1)) if ptr else None)
+
+
+class AudioFlow:
+    GRACE = 4.0
+    LIMIT = 3.0
+
+    def __init__(self):
+        self.reset(time.monotonic())
+
+    def reset(self, now):
+        self.started = now
+        self.last_ptr = None
+        self.moved_at = now
+        self.checked_at = 0
+
+    def stalled(self, pcm, now):
+        if now - self.checked_at < 1:
+            return False
+        self.checked_at = now
+        state, ptr = capture_position(pcm)
+        if state is None:
+            return False
+        if state == "RUNNING" and ptr is not None and ptr != self.last_ptr:
+            self.last_ptr = ptr
+            self.moved_at = now
+            return False
+        if now - self.started < self.GRACE:
+            return False
+        return now - self.moved_at >= self.LIMIT
+
+
 def spawn_logged(cmd, tag, on_fail=None):
     proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE, universal_newlines=True, errors="replace")
@@ -2245,13 +2292,19 @@ class Dock:
         t = threading.Thread(target=self.hotkeys.watch, args=(stop, hit), daemon=True)
         t.start()
         audio_tries, next_audio = 0, time.monotonic() + 1
+        flow = AudioFlow()
         while proc.poll() is None:
             now = time.monotonic()
+            if audio is not None and audio.poll() is None and flow.stalled(st.vita_audio, now):
+                log("usb audio stalled, restarting it")
+                self.stop_audio(audio)
+                audio, next_audio = None, now
             if now >= next_audio and usb_audio_wanted(st.cfg) and (audio is None or audio.poll() is not None):
                 audio_tries += 1
                 if audio is not None:
                     log("usb audio stopped, starting it again")
                 audio = self.start_audio()
+                flow.reset(now)
                 next_audio = now + (1 if audio_tries < 10 else 5)
             if hit.is_set():
                 proc.terminate()

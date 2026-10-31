@@ -1,6 +1,7 @@
 TARGET  = vitadock
 OBJS    = vitadock.o
-LIBS    = -lSceThreadmgrForDriver_stub -lSceUdcdForDriver_stub \
+LIBS    = -lSceThreadmgrForDriver_stub -lSceUdcdForDriver_stub -lSceModulemgrForDriver_stub \
+          -lSceIofilemgrForDriver_stub \
           -ltaihenForKernel_stub -ltaihenModuleUtils_stub
 
 PREFIX  = arm-vita-eabi

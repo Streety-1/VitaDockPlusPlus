@@ -50,7 +50,7 @@ Get `vitastream_lcd_off.skprx` if you've got a slim, or `vitastream_oled_off.skp
 
 If it won't boot afterwards, hold L while it starts up to skip plugins, then fix the config. To check it's working, plug the Vita into a PC and it should come up as a camera.
 
-The source for vitadock.skprx is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes. It's new, so if the Vita misbehaves, take its line out of `config.txt` and [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues).
+The source for vitadock.skprx is in [vita-plugin](vita-plugin), and GitHub builds it with the [VitaSDK](https://vitasdk.org) every time it changes. It's new, so if the Vita misbehaves, take its line out of `config.txt` and [open an issue](https://github.com/Streety-1/VitaDockPlusPlus/issues). It keeps a short log at `ur0:data/vitadock.txt` (you can open it in VitaShell), which is the most useful thing to attach.
 
 ## Installing on the Pi
 
