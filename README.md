@@ -106,8 +106,6 @@ Whichever speed you pick, the dock also runs the CPU at full speed, stops USB po
 
 The other half of the delay is your TV, so turn on **game mode** for that HDMI input. It makes as much difference as anything above.
 
-If you want to measure it, use the plain `vitastream.skprx` (the one that leaves the screen on), film the Vita and the TV together in slow motion on your phone, and count the frames between them.
-
 ## Sound
 
 - **Over USB** with vitastream. Nothing to set up, the dock notices and plays it out of the TV. The Vita's own speaker goes quiet while it does, that's normal.
@@ -123,17 +121,11 @@ Even then it's slow. The Pi's USB ports are the same kind as a computer's, so th
 - Use the screen-off version of vitastream (`_lcd_off` or `_oled_off`). The Vita's screen is the biggest drain, so with it off more power goes to the battery.
 - If you've got the official 27W (5A) power supply, turn on **usb power for the vita** under *power and charging*. The Pi 5 only gives its USB ports 600mA between them unless it knows it's on a 5A supply, and this lifts that to 1.6A. Don't turn it on with a weaker supply.
 
-## Controllers
-
-Pair your controller with the Vita, since that's what's running the game. DualShock 3 and 4 work out of the box, and [MiniVitaTV](https://github.com/TheOfficialFloW/MiniVitaTV) is worth having so games use their PS TV control layouts. Touch controls don't work while it's on the TV, so pick games that are fine on buttons.
-
 ## Updating
 
 Pick *check for updates* under *system*. If there's a new version it asks first, then shows a progress bar while it installs and restarts the dock when it's done. Your settings are kept. The first update after a big release can take a few minutes because it has to download new packages. If something goes wrong it tells you what, and the full log is in `/var/log/vitadock-update.log`.
 
 Running the installer again (curl line or USB stick) also updates it.
-
-On 1.1.0 to 1.3.0 the update option was broken. It works now, but the old screen just says "updating" with no progress bar, so leave it 5 to 10 minutes. Or run the installer again.
 
 ## Uninstalling
 
