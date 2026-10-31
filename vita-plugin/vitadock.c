@@ -30,6 +30,8 @@ static int (*panel_off)(void);
 static SceUInt32 (*panel_get)(void);
 static int (*panel_set)(SceUInt32);
 
+static int (*module_info_by_addr)(const void *addr, SceKernelModuleInfo *info);
+
 static SceUID hook_on_id = -1, hook_off_id = -1, hook_set_id = -1;
 static tai_hook_ref_t hook_on_ref, hook_off_ref, hook_set_ref;
 
@@ -103,7 +105,8 @@ static int from_video_plugin(const void *ret_addr)
 	for (unsigned i = 0; i < sizeof(info); i++)
 		p[i] = 0;
 	info.size = sizeof(info);
-	if (ksceKernelGetModuleInfoByAddr((const void *)((uintptr_t)ret_addr & ~1u), &info) < 0)
+	if (!module_info_by_addr ||
+	    module_info_by_addr((const void *)((uintptr_t)ret_addr & ~1u), &info) < 0)
 		return 0;
 	info.module_name[sizeof(info.module_name) - 1] = 0;
 	for (unsigned i = 0; i < sizeof(VIDEO_PLUGINS) / sizeof(VIDEO_PLUGINS[0]); i++)
@@ -235,6 +238,13 @@ int module_start(SceSize args, void *argp)
 		log_flush(1);
 		return SCE_KERNEL_START_FAILED;
 	}
+	uintptr_t f;
+	if (module_get_export_func(KERNEL_PID, "SceKernelModulemgr", 0xD4A60A52, 0x1D9E0F7E, &f) < 0) {
+		log_add("couldn't find ksceKernelGetModuleInfoByAddr, not doing anything\n");
+		log_flush(1);
+		return SCE_KERNEL_START_FAILED;
+	}
+	module_info_by_addr = (int (*)(const void *, SceKernelModuleInfo *))f;
 	log_add("screen driver: ");
 	log_add(panel->module);
 	log_add("\n");
