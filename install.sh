@@ -32,7 +32,7 @@ options:
   --update           update an existing install (keeps your settings)
   --reset-config     put the settings back to default
   --no-reboot        don't reboot at the end
-  --progress=FILE    write progress for the tv menu's update screen (used by the dock)
+  --progress=FILE    write progress for the tv menu's update screen
 EOF
 }
 
